@@ -395,25 +395,32 @@ set_tx_power(radio_value_t power)
   int i;
   rfc_CMD_SET_TX_POWER_t cmd;
 
-  /* Send a CMD_SET_TX_POWER command to the RF */
-  memset(&cmd, 0x00, sizeof(cmd));
-
-  cmd.commandNo = CMD_SET_TX_POWER;
-
+  /* First, find the correct setting and save it */
   for(i = OUTPUT_CONFIG_COUNT - 1; i >= 0; --i) {
     if(power <= output_power[i].dbm) {
-      cmd.txPower.IB = output_power[i].register_ib;
-      cmd.txPower.GC = output_power[i].register_gc;
-      cmd.txPower.tempCoeff = output_power[i].temp_coeff;
-
-      if(rf_core_send_cmd((uint32_t)&cmd, &cmd_status) == RF_CORE_CMD_OK) {
-        /* Success: Remember the new setting */
-        tx_power_current = &output_power[i];
-      } else {
-        PRINTF("set_tx_power: CMDSTA=0x%08lx\n", cmd_status);
-      }
-      return;
+      tx_power_current = &output_power[i];
+      break;
     }
+  }
+
+  /*
+   * If the core is not accessible, the new setting will be applied next
+   * time we send CMD_RADIO_SETUP, so we don't need to do anything further.
+   * If the core is accessible, we can apply the new setting immediately with
+   * CMD_SET_TX_POWER
+   */
+  if(rf_core_is_accessible() == RF_CORE_NOT_ACCESSIBLE) {
+    return;
+  }
+
+  memset(&cmd, 0x00, sizeof(cmd));
+  cmd.commandNo = CMD_SET_TX_POWER;
+  cmd.txPower.IB = output_power[i].register_ib;
+  cmd.txPower.GC = output_power[i].register_gc;
+  cmd.txPower.tempCoeff = output_power[i].temp_coeff;
+
+  if(rf_core_send_cmd((uint32_t)&cmd, &cmd_status) == RF_CORE_CMD_ERROR) {
+    PRINTF("set_tx_power: CMDSTA=0x%08lx\n", cmd_status);
   }
 }
 /*---------------------------------------------------------------------------*/
@@ -760,7 +767,7 @@ transmit(unsigned short transmit_len)
   uint16_t stat;
   uint8_t tx_active = 0;
   rtimer_clock_t t0;
-  rfc_CMD_IEEE_TX_t cmd;
+  volatile rfc_CMD_IEEE_TX_t cmd;
 
   if(!rf_is_on()) {
     was_off = 1;
@@ -1042,12 +1049,6 @@ static int
 on(void)
 {
   /*
-   * Request the HF XOSC as the source for the HF clock. Needed before we can
-   * use the FS. This will only request, it will _not_ perform the switch.
-   */
-  oscillators_request_hf_xosc();
-
-  /*
    * If we are in the middle of a BLE operation, we got called by ContikiMAC
    * from within an interrupt context. Abort, but pretend everything is OK.
    */
@@ -1055,6 +1056,12 @@ on(void)
     PRINTF("on: Interrupt context but BLE in progress\n");
     return RF_CORE_CMD_OK;
   }
+
+  /*
+   * Request the HF XOSC as the source for the HF clock. Needed before we can
+   * use the FS. This will only request, it will _not_ perform the switch.
+   */
+  oscillators_request_hf_xosc();
 
   if(rf_is_on()) {
     PRINTF("on: We were on. PD=%u, RX=0x%04x \n", rf_core_is_accessible(),

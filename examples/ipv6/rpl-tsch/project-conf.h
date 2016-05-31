@@ -100,8 +100,8 @@
 #if WITH_SECURITY
 
 /* Enable security */
-#undef LLSEC802154_CONF_SECURITY_LEVEL
-#define LLSEC802154_CONF_SECURITY_LEVEL 1
+#undef LLSEC802154_CONF_ENABLED
+#define LLSEC802154_CONF_ENABLED 1
 /* TSCH uses explicit keys to identify k1 and k2 */
 #undef LLSEC802154_CONF_USES_EXPLICIT_KEYS
 #define LLSEC802154_CONF_USES_EXPLICIT_KEYS 1
@@ -153,7 +153,7 @@
 #define TSCH_SCHEDULE_CONF_DEFAULT_LENGTH 2
 /* Reduce log level to make space for security on z1 */
 #undef TSCH_LOG_CONF_LEVEL
-#define TSCH_LOG_CONF_LEVEL 1
+#define TSCH_LOG_CONF_LEVEL 0
 #endif /* WITH_SECURITY */
 
 #endif /* CONTIKI_TARGET_Z1 */
