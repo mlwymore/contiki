@@ -1,0 +1,1 @@
+#define NETSTACK_CONF_RDC ccmac_driver
