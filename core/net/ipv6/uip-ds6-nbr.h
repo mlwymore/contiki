@@ -50,8 +50,6 @@
 #include "net/nbr-table.h"
 #include "sys/stimer.h"
 #include "net/ipv6/uip-ds6.h"
-#include "net/nbr-table.h"
-
 #if UIP_CONF_IPV6_QUEUE_PKT
 #include "net/ip/uip-packetqueue.h"
 #endif                          /*UIP_CONF_QUEUE_PKT */
@@ -71,7 +69,6 @@ typedef struct uip_ds6_nbr {
   uip_ipaddr_t ipaddr;
   uint8_t isrouter;
   uint8_t state;
-  uint16_t link_metric;
 #if UIP_ND6_SEND_NA || UIP_ND6_SEND_RA
   struct stimer reachable;
   struct stimer sendns;

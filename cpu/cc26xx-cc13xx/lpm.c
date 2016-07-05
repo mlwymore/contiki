@@ -46,6 +46,7 @@
 #include "lpm.h"
 #include "sys/energest.h"
 #include "lib/list.h"
+#include "dev/aux-ctrl.h"
 #include "dev/leds.h"
 #include "dev/watchdog.h"
 #include "dev/soc-rtc.h"
@@ -53,6 +54,7 @@
 
 #include <stdint.h>
 #include <string.h>
+#include <stdbool.h>
 /*---------------------------------------------------------------------------*/
 #if ENERGEST_CONF_ON
 static unsigned long irq_energest = 0;
@@ -75,12 +77,13 @@ LIST(modules_list);
  * Don't consider standby mode if the next AON RTC event is scheduled to fire
  * in less than STANDBY_MIN_DURATION rtimer ticks
  */
-#define STANDBY_MIN_DURATION  (RTIMER_SECOND >> 11)
-#define MINIMAL_SAFE_SCHEDUAL 8u
+#define STANDBY_MIN_DURATION (RTIMER_SECOND / 100) /* 10.0 ms */
+
+/* Wake up this much time earlier before the next rtimer */
+#define SLEEP_GUARD_TIME (RTIMER_SECOND / 1000) /* 1.0 ms */
+
 #define MAX_SLEEP_TIME        RTIMER_SECOND
-#define DEFAULT_SLEEP_TIME    RTIMER_SECOND
-/*---------------------------------------------------------------------------*/
-#define CLK_TO_RT(c) ((c) * (RTIMER_SECOND / CLOCK_SECOND))
+#define MINIMAL_SAFE_SCHEDULE 8u
 /*---------------------------------------------------------------------------*/
 /* Prototype of a function in clock.c. Called every time we come out of DS */
 void clock_update(void);
@@ -90,8 +93,8 @@ lpm_shutdown(uint32_t wakeup_pin, uint32_t io_pull, uint32_t wake_on)
 {
   lpm_registered_module_t *module;
   int i;
-  uint32_t io_cfg = (IOC_STD_INPUT & ~IOC_IOPULL_M) | io_pull |
-    wake_on;
+  uint32_t io_cfg = (IOC_STD_INPUT & ~IOC_IOPULL_M) | io_pull | wake_on;
+  aux_consumer_module_t aux = { .clocks = AUX_WUC_OSCCTRL_CLOCK };
 
   /* This procedure may not be interrupted */
   ti_lib_int_master_disable();
@@ -135,16 +138,16 @@ lpm_shutdown(uint32_t wakeup_pin, uint32_t io_pull, uint32_t wake_on)
   ti_lib_prcm_power_domain_off(PRCM_DOMAIN_RFCORE | PRCM_DOMAIN_SERIAL |
                                PRCM_DOMAIN_PERIPH);
 
+  /* Register an aux-ctrl consumer to avoid powercycling AUX twice in a row */
+  aux_ctrl_register_consumer(&aux);
   oscillators_switch_to_hf_rc();
   oscillators_select_lf_rcosc();
 
-  /* Configure clock sources for MCU and AUX: No clock */
+  /* Configure clock sources for MCU: No clock */
   ti_lib_aon_wuc_mcu_power_down_config(AONWUC_NO_CLOCK);
-  ti_lib_aon_wuc_aux_power_down_config(AONWUC_NO_CLOCK);
 
-  /* Disable SRAM and AUX retentions */
+  /* Disable SRAM retention */
   ti_lib_aon_wuc_mcu_sram_config(0);
-  ti_lib_aon_wuc_aux_sram_config(false);
 
   /*
    * Request CPU, SYSBYS and VIMS PD off.
@@ -157,9 +160,8 @@ lpm_shutdown(uint32_t wakeup_pin, uint32_t io_pull, uint32_t wake_on)
   ti_lib_aon_wuc_jtag_power_off();
 
   /* Turn off AUX */
-  ti_lib_aux_wuc_power_ctrl(AUX_WUC_POWER_OFF);
+  aux_ctrl_power_down(true);
   ti_lib_aon_wuc_domain_power_down_enable();
-  while(ti_lib_aon_wuc_power_status_get() & AONWUC_AUX_POWER_ON);
 
   /*
    * Request MCU VD power off.
@@ -222,6 +224,9 @@ wake_up(void)
   /* Check operating conditions, optimally choose DCDC versus GLDO */
   ti_lib_sys_ctrl_dcdc_voltage_conditional_control();
 
+  /* Fire up AUX is the user has requested this */
+  aux_ctrl_power_up();
+
   /*
    * We may or may not have been woken up by an AON RTC tick. If not, we need
    * to adjust our software tick counter
@@ -237,13 +242,123 @@ wake_up(void)
       module->wakeup();
     }
   }
+
+#if CC2650_FAST_RADIO_STARTUP
+  /*
+   * Trigger a switch to the XOSC, so that we can subsequently use the RF FS
+   */
+  oscillators_request_hf_xosc();
+#endif
+}
+/*---------------------------------------------------------------------------*/
+static int
+setup_sleep_mode(rtimer_clock_t *next_timer)
+{
+  lpm_registered_module_t *module;
+  uint8_t max_pm = LPM_MODE_MAX_SUPPORTED;
+
+  rtimer_clock_t now = RTIMER_NOW();
+  const rtimer_clock_t max_sleep = now + MAX_SLEEP_TIME;
+
+  /* next_timer will hold the time of the next system wakeup due to a timer*/
+  *next_timer = max_sleep;
+
+  /* Check if any events fired before we turned interrupts off. If so, abort */
+  if(LPM_MODE_MAX_SUPPORTED == LPM_MODE_AWAKE || process_nevents()) {
+    return LPM_MODE_AWAKE;
+  }
+
+  if(ti_lib_aon_rtc_channel_active(AON_RTC_CH0)) {
+    rtimer_clock_t next_rtimer;
+    /* find out the timer of the next rtimer interrupt */
+    next_rtimer = ti_lib_aon_rtc_compare_value_get(AON_RTC_CH0);
+    if(RTIMER_CLOCK_LT(next_rtimer, now + 2)) {
+      return LPM_MODE_AWAKE;
+    }
+    if(RTIMER_CLOCK_LT(next_rtimer, now + STANDBY_MIN_DURATION)) {
+      return LPM_MODE_SLEEP;
+    }
+    *next_timer = next_rtimer;
+  }
+
+  /* also find out the timer of the next etimer */
+  if(etimer_pending()) {
+    int32_t until_next_etimer;
+    rtimer_clock_t next_etimer;
+
+    until_next_etimer = (int32_t)etimer_next_expiration_time() - (int32_t)clock_time();
+    if(until_next_etimer < 1) {
+      return LPM_MODE_AWAKE;
+    }
+
+    next_etimer = soc_rtc_last_isr_time() + (until_next_etimer * (RTIMER_SECOND / CLOCK_SECOND));
+    if(RTIMER_CLOCK_LT(next_etimer, now + STANDBY_MIN_DURATION)) {
+      /* ensure that we schedule sleep a minimal number of ticks into the
+         future */
+      soc_rtc_schedule_one_shot(AON_RTC_CH1, now + MINIMAL_SAFE_SCHEDULE);
+      return LPM_MODE_SLEEP;
+    }
+
+    if(RTIMER_CLOCK_LT(max_sleep, next_etimer)) {
+      /* if max_pm is LPM_MODE_SLEEP, we could trigger the watchdog if we slept
+         for too long. */
+      if(RTIMER_CLOCK_LT(max_sleep, *next_timer)) {
+        soc_rtc_schedule_one_shot(AON_RTC_CH1, max_sleep);
+      }
+    } else {
+      /* Reschedule AON RTC CH1 to fire just in time for the next etimer event */
+      soc_rtc_schedule_one_shot(AON_RTC_CH1, next_etimer);
+    }
+
+    if(RTIMER_CLOCK_LT(next_etimer, *next_timer)) {
+      /* set `next_timer` to the time the first etimer fires */
+      *next_timer = next_etimer;
+    }
+  }
+
+  /* Collect max allowed PM permission from interested modules */
+  for(module = list_head(modules_list); module != NULL;
+      module = module->next) {
+    if(module->request_max_pm) {
+      uint8_t module_pm = module->request_max_pm();
+      if(module_pm < max_pm) {
+        max_pm = module_pm;
+      }
+    }
+  }
+
+  return max_pm;
+}
+/*---------------------------------------------------------------------------*/
+void
+lpm_sleep(void)
+{
+  ENERGEST_SWITCH(ENERGEST_TYPE_CPU, ENERGEST_TYPE_LPM);
+
+  /* We are only interested in IRQ energest while idle or in LPM */
+  ENERGEST_IRQ_RESTORE(irq_energest);
+
+  /* Just to be on the safe side, explicitly disable Deep Sleep */
+  HWREG(NVIC_SYS_CTRL) &= ~(NVIC_SYS_CTRL_SLEEPDEEP);
+
+  ti_lib_prcm_sleep();
+
+  /* Remember IRQ energest for next pass */
+  ENERGEST_IRQ_SAVE(irq_energest);
+
+  ENERGEST_SWITCH(ENERGEST_TYPE_LPM, ENERGEST_TYPE_CPU);
 }
 /*---------------------------------------------------------------------------*/
 static void
-deep_sleep(void)
+deep_sleep(rtimer_clock_t next_timer)
 {
   uint32_t domains = LOCKABLE_DOMAINS;
   lpm_registered_module_t *module;
+
+#if CC2650_FAST_RADIO_STARTUP
+  /* schedule a wakeup briefly before the next etimer/rtimer to wake up the system */
+  soc_rtc_schedule_one_shot(AON_RTC_CH2, next_timer - SLEEP_GUARD_TIME);
+#endif
 
   /*
    * Notify all registered modules that we are dropping to mode X. We do not
@@ -300,22 +415,22 @@ deep_sleep(void)
    * turn back off.
    *
    * If the radio is on, we won't even reach here, and if it's off the HF
-   * clock source should already be the HF RC.
+   * clock source should already be the HF RC, unless CC2650_FAST_RADIO_STARTUP
+   * is defined.
    *
    * Nevertheless, request the switch to the HF RC explicitly here.
    */
   oscillators_switch_to_hf_rc();
 
-  /* Configure clock sources for MCU and AUX: No clock */
+  /* Shut Down the AUX if the user application is not using it */
+  aux_ctrl_power_down(false);
+
+  /* Configure clock sources for MCU: No clock */
   ti_lib_aon_wuc_mcu_power_down_config(AONWUC_NO_CLOCK);
-  ti_lib_aon_wuc_aux_power_down_config(AONWUC_NO_CLOCK);
 
   /* Full RAM retention. */
   ti_lib_aon_wuc_mcu_sram_config(MCU_RAM0_RETENTION | MCU_RAM1_RETENTION |
                                  MCU_RAM2_RETENTION | MCU_RAM3_RETENTION);
-
-  /* Disable retention of AUX RAM */
-  ti_lib_aon_wuc_aux_sram_config(false);
 
   /*
    * Always turn off RFCORE, CPU, SYSBUS and VIMS. RFCORE should be off
@@ -327,10 +442,8 @@ deep_sleep(void)
   /* Request JTAG domain power off */
   ti_lib_aon_wuc_jtag_power_off();
 
-  /* Turn off AUX */
-  ti_lib_aux_wuc_power_ctrl(AUX_WUC_POWER_OFF);
+  /* Allow MCU and AUX powerdown */
   ti_lib_aon_wuc_domain_power_down_enable();
-  while(ti_lib_aon_wuc_power_status_get() & AONWUC_AUX_POWER_ON);
 
   /* Configure the recharge controller */
   ti_lib_sys_ctrl_set_recharge_before_power_down(XOSC_IN_HIGH_POWER_MODE);
@@ -369,128 +482,29 @@ deep_sleep(void)
    * unpending events so the handlers can fire
    */
   wake_up();
-}
-/*---------------------------------------------------------------------------*/
-static void
-safe_schedule_rtimer(rtimer_clock_t time, rtimer_clock_t now, int pm)
-{
-  rtimer_clock_t min_sleep;
-  rtimer_clock_t max_sleep;
 
-  min_sleep = now + MINIMAL_SAFE_SCHEDUAL;
-  max_sleep = now + MAX_SLEEP_TIME;
-
-  if(RTIMER_CLOCK_LT(time, min_sleep)) {
-    /* ensure that we schedule sleep a minimal number of ticks into the
-       future */
-    soc_rtc_schedule_one_shot(AON_RTC_CH1, min_sleep);
-  } else if((pm == LPM_MODE_SLEEP) && RTIMER_CLOCK_LT(max_sleep, time)) {
-    /* if max_pm is LPM_MODE_SLEEP, we could trigger the watchdog if we slept
-       for too long. */
-    soc_rtc_schedule_one_shot(AON_RTC_CH1, max_sleep);
-  } else {
-    soc_rtc_schedule_one_shot(AON_RTC_CH1, time);
-  }
-}
-/*---------------------------------------------------------------------------*/
-static int
-setup_sleep_mode(void)
-{
-  rtimer_clock_t et_distance = 0;
-
-  lpm_registered_module_t *module;
-  int max_pm;
-  int module_pm;
-  int etimer_is_pending;
-  rtimer_clock_t now;
-  rtimer_clock_t et_time;
-  rtimer_clock_t next_trig;
-
-  max_pm = LPM_MODE_MAX_SUPPORTED;
-  now = RTIMER_NOW();
-
-  if((LPM_MODE_MAX_SUPPORTED == LPM_MODE_AWAKE) || process_nevents()) {
-    return LPM_MODE_AWAKE;
-  }
-
-  etimer_is_pending = etimer_pending();
-
-  if(etimer_is_pending) {
-    et_distance = CLK_TO_RT(etimer_next_expiration_time() - clock_time());
-
-    if(RTIMER_CLOCK_LT(et_distance, 1)) {
-      /* there is an etimer which is already expired; we shouldn't go to
-         sleep at all */
-      return LPM_MODE_AWAKE;
-    }
-  }
-
-  next_trig = soc_rtc_get_next_trigger();
-  if(RTIMER_CLOCK_LT(next_trig, now + STANDBY_MIN_DURATION)) {
-    return LPM_MODE_SLEEP;
-  }
-
-  /* Collect max allowed PM permission from interested modules */
-  for(module = list_head(modules_list); module != NULL;
-      module = module->next) {
-    if(module->request_max_pm) {
-      module_pm = module->request_max_pm();
-      if(module_pm < max_pm) {
-        max_pm = module_pm;
-      }
-    }
-  }
-
-  /* Reschedule AON RTC CH1 to fire just in time for the next etimer event */
-  if(etimer_is_pending) {
-    et_time = soc_rtc_last_isr_time() + et_distance;
-
-    safe_schedule_rtimer(et_time, now, max_pm);
-  } else {
-    /* set a maximal sleep period if no etimers are queued */
-    soc_rtc_schedule_one_shot(AON_RTC_CH1, now + DEFAULT_SLEEP_TIME);
-  }
-
-  return max_pm;
+  ti_lib_int_master_enable();
 }
 /*---------------------------------------------------------------------------*/
 void
 lpm_drop()
 {
   uint8_t max_pm;
+  rtimer_clock_t next_timer;
 
   /* Critical. Don't get interrupted! */
   ti_lib_int_master_disable();
 
-  max_pm = setup_sleep_mode();
+  max_pm = setup_sleep_mode(&next_timer);
 
   /* Drop */
   if(max_pm == LPM_MODE_SLEEP) {
     lpm_sleep();
   } else if(max_pm == LPM_MODE_DEEP_SLEEP) {
-    deep_sleep();
+    deep_sleep(next_timer);
   }
 
   ti_lib_int_master_enable();
-}
-/*---------------------------------------------------------------------------*/
-void
-lpm_sleep(void)
-{
-  ENERGEST_SWITCH(ENERGEST_TYPE_CPU, ENERGEST_TYPE_LPM);
-
-  /* We are only interested in IRQ energest while idle or in LPM */
-  ENERGEST_IRQ_RESTORE(irq_energest);
-
-  /* Just to be on the safe side, explicitly disable Deep Sleep */
-  HWREG(NVIC_SYS_CTRL) &= ~(NVIC_SYS_CTRL_SLEEPDEEP);
-
-  ti_lib_prcm_sleep();
-
-  /* Remember IRQ energest for next pass */
-  ENERGEST_IRQ_SAVE(irq_energest);
-
-  ENERGEST_SWITCH(ENERGEST_TYPE_LPM, ENERGEST_TYPE_CPU);
 }
 /*---------------------------------------------------------------------------*/
 void
@@ -511,7 +525,7 @@ lpm_init()
   list_init(modules_list);
 
   /* Always wake up on any DIO edge detection */
-  ti_lib_aon_event_mcu_wake_up_set(AON_EVENT_MCU_WU2, AON_EVENT_IO);
+  ti_lib_aon_event_mcu_wake_up_set(AON_EVENT_MCU_WU3, AON_EVENT_IO);
 }
 /*---------------------------------------------------------------------------*/
 void
