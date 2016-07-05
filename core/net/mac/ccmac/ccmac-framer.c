@@ -76,7 +76,7 @@ extern const struct framer DECORATED_FRAMER;
 #define PRINTF(...)
 #endif
 
-static void pad(void);
+//static void pad(void);
 
 /* 2-byte header for recovering padded packets.
    Wireshark will not understand such packets at present. */
@@ -128,7 +128,7 @@ create(void)
 /*  */
 /*  transmit_len = packetbuf_totlen() + hdr_length();*/
 /*  if(transmit_len < SHORTEST_PACKET_SIZE) {*/
-/*    /* Padding required */
+    /* Padding required */
 /*    zeroes_count = SHORTEST_PACKET_SIZE - transmit_len;*/
 /*    ptr = packetbuf_dataptr();*/
 /*    memset(ptr + packetbuf_datalen(), 0, zeroes_count);*/

@@ -76,10 +76,16 @@ PROCESS_THREAD(example_unicast_process, ev, data)
     PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&et));
 
     packetbuf_copyfrom("Hello", 5);
-    addr.u8[0] = 1;
-    addr.u8[1] = 0;
+    addr.u8[0] = 212;
+    addr.u8[1] = 5;
+    printf("unicast message ready to send\n");
+    printf("Me: %d.%d    Receiver: %d.%d\n",
+        linkaddr_node_addr.u8[0], linkaddr_node_addr.u8[1],
+        addr.u8[0], addr.u8[1]);
     if(!linkaddr_cmp(&addr, &linkaddr_node_addr)) {
       unicast_send(&uc, &addr);
+      printf("unicast message sent to %d.%d\n",
+	 addr.u8[0], addr.u8[1]);
     }
 
   }

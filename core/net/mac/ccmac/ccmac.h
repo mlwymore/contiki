@@ -45,10 +45,11 @@
 #include "net/mac/rdc.h"
 #include "dev/radio.h"
 #include "net/rime/rime.h"
+#include "net/linkaddr.h"
 
 typedef struct ccmac_beacon_packet {
-  linkaddr_t my_addr;
-  uint32_t data;
+  linkaddr_t sink_addr;
+  clock_time_t beacon_interval;
 } ccmac_beacon_packet_t;
 
 extern const struct rdc_driver ccmac_driver;
