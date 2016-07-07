@@ -1,3 +1,11 @@
+#undef NETSTACK_CONF_NETWORK
+#define NETSTACK_CONF_NETWORK rime_driver
+#undef NETSTACK_CONF_LLSEC
+#define NETSTACK_CONF_LLSEC nullsec_driver
+#undef NETSTACK_CONF_MAC
+#define NETSTACK_CONF_MAC nullmac_driver
+#undef NETSTACK_CONF_FRAMER
+#define NETSTACK_CONF_FRAMER framer_nullmac
 #undef NETSTACK_CONF_RDC
 #define NETSTACK_CONF_RDC ccmac_driver
 #ifndef CCMAC_CONF_IS_SINK

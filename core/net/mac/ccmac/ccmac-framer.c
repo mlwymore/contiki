@@ -53,11 +53,11 @@
    Padded packets will have the wrong ipv6 checksum unless CONTIKIMAC_HEADER
    is used (on both sides) and the receiver will ignore them.
    With no header, reduce to transmit a proper multicast RPL DIS. */
-//#ifdef CONTIKIMAC_FRAMER_CONF_SHORTEST_PACKET_SIZE
-//#define SHORTEST_PACKET_SIZE CONTIKIMAC_FRAMER_CONF_SHORTEST_PACKET_SIZE
-//#else /* CONTIKIMAC_FRAMER_CONF_SHORTEST_PACKET_SIZE */
-//#define SHORTEST_PACKET_SIZE 43
-//#endif /* CONTIKIMAC_FRAMER_CONF_SHORTEST_PACKET_SIZE */
+#ifdef CONTIKIMAC_FRAMER_CONF_SHORTEST_PACKET_SIZE
+#define SHORTEST_PACKET_SIZE CONTIKIMAC_FRAMER_CONF_SHORTEST_PACKET_SIZE
+#else /* CONTIKIMAC_FRAMER_CONF_SHORTEST_PACKET_SIZE */
+#define SHORTEST_PACKET_SIZE 43
+#endif /* CONTIKIMAC_FRAMER_CONF_SHORTEST_PACKET_SIZE */
 
 //mlw - don't know what decorated means
 #ifdef CCMAC_FRAMER_CONF_DECORATED_FRAMER
@@ -68,7 +68,7 @@
 
 extern const struct framer DECORATED_FRAMER;
 
-#define DEBUG 0
+#define DEBUG 1
 #if DEBUG
 #include <stdio.h>
 #define PRINTF(...) printf(__VA_ARGS__)
@@ -76,7 +76,7 @@ extern const struct framer DECORATED_FRAMER;
 #define PRINTF(...)
 #endif
 
-//static void pad(void);
+static void pad(void);
 
 /* 2-byte header for recovering padded packets.
    Wireshark will not understand such packets at present. */
@@ -105,8 +105,8 @@ create(void)
   chdr = packetbuf_hdrptr();
   chdr->id = CCMAC_ID;
   chdr->len = packetbuf_datalen();
-  //mlw - We shouldn't need to pad.
-  //pad();
+
+  pad();
   
   hdr_len = DECORATED_FRAMER.create();
   if(hdr_len < 0) {
@@ -119,22 +119,22 @@ create(void)
   return hdr_len + sizeof(struct hdr);
 }
 /*---------------------------------------------------------------------------*/
-/*static void*/
-/*pad(void)*/
-/*{*/
-/*  int transmit_len;*/
-/*  uint8_t *ptr;*/
-/*  uint8_t zeroes_count;*/
-/*  */
-/*  transmit_len = packetbuf_totlen() + hdr_length();*/
-/*  if(transmit_len < SHORTEST_PACKET_SIZE) {*/
+static void
+pad(void)
+{
+  int transmit_len;
+  uint8_t *ptr;
+  uint8_t zeroes_count;
+
+  transmit_len = packetbuf_totlen() + hdr_length();
+  if(transmit_len < SHORTEST_PACKET_SIZE) {
     /* Padding required */
-/*    zeroes_count = SHORTEST_PACKET_SIZE - transmit_len;*/
-/*    ptr = packetbuf_dataptr();*/
-/*    memset(ptr + packetbuf_datalen(), 0, zeroes_count);*/
-/*    packetbuf_set_datalen(packetbuf_datalen() + zeroes_count);*/
-/*  }*/
-/*}*/
+    zeroes_count = SHORTEST_PACKET_SIZE - transmit_len;
+    ptr = packetbuf_dataptr();
+    memset(ptr + packetbuf_datalen(), 0, zeroes_count);
+    packetbuf_set_datalen(packetbuf_datalen() + zeroes_count);
+  }
+}
 /*---------------------------------------------------------------------------*/
 static int
 parse(void)

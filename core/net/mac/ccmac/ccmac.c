@@ -85,6 +85,9 @@ static volatile uint8_t radio_is_in_use = 0;
 static mac_callback_t _sent_callback;
 static void * _ptr;
 
+static uint8_t _sendMe[PACKETBUF_SIZE];
+static uint8_t _sendMeLen;
+
 
 /* Send a beacon packet and start listening for a response. Callback to rtimer.set */
 static void send_beacon(struct rtimer * rt, void * ptr) {
@@ -146,6 +149,13 @@ static void send_beacon(struct rtimer * rt, void * ptr) {
   return;
 }
 
+static void send_packet(void) {
+  packetbuf_copyfrom(_sendMe, _sendMeLen);
+  NETSTACK_FRAMER.create();
+  NETSTACK_RADIO.send(packetbuf_hdrptr(), packetbuf_totlen());
+  sink_is_awake = 0;
+  mac_call_sent_callback(_sent_callback, _ptr, MAC_TX_OK, 1);
+}
 
 PROCESS(wait_for_beacon_process, "Process that waits for a beacon");
 PROCESS_THREAD(wait_for_beacon_process, ev, data) {
@@ -156,8 +166,7 @@ PROCESS_THREAD(wait_for_beacon_process, ev, data) {
   #if DEBUG
   leds_toggle(LEDS_RED);
   #endif
-  sink_is_awake = 0;
-  mac_call_sent_callback(_sent_callback, _ptr, MAC_TX_OK, 1);
+  send_packet();
   PROCESS_END();
 }
 
@@ -181,10 +190,15 @@ static void init(void) {
 static void send(mac_callback_t sent_callback, void *ptr) {
   PRINTF("send: Packets to send.\n");
   if (radio_is_in_use) {
+    PRINTF("send: Radio in use, deferring transmission.\n");
     mac_call_sent_callback(sent_callback, ptr, MAC_TX_DEFERRED, 1);
     return;
   }
 
+  _sent_callback = sent_callback;
+  _ptr = ptr;
+  packetbuf_copyto(_sendMe);
+  _sendMeLen = packetbuf_totlen();
   process_start(&wait_for_beacon_process, NULL);
   
   return;
