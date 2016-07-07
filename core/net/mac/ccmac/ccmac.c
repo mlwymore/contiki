@@ -44,6 +44,8 @@
 //#include "dev/radio.h"
 #include "net/netstack.h"
 #include "net/mac/ccmac/ccmac.h"
+#include "dev/leds.h"
+#include "sys/process.h"
 
 #define DEBUG 1
 #if DEBUG
@@ -75,17 +77,21 @@ static struct rtimer _beaconTimer;
 
 
 static volatile uint8_t sink_is_beaconing = 0;
+static volatile uint8_t sink_is_awake = 0;
 static volatile uint8_t radio_is_on = 0;
 static volatile uint8_t radio_is_in_use = 0;
+
+/* Used to allow process to call MAC callback */
+static mac_callback_t _sent_callback;
+static void * _ptr;
 
 
 /* Send a beacon packet and start listening for a response. Callback to rtimer.set */
 static void send_beacon(struct rtimer * rt, void * ptr) {
   ccmac_beacon_packet_t beacon;
-  linkaddr_copy(&(beacon.sink_addr), &linkaddr_node_addr);
   beacon.beacon_interval = _Tbeacon;
 
-  // off() sets sink_is_beaconing to 0. In that case, return without sending or reseting rtimer
+  // off() sets sink_is_beaconing to 0. In that case, return without sending or resetting rtimer
   if (!IS_SINK || !sink_is_beaconing) {
     PRINTF("send_beacon: Skipping beacon and stopping.\n");
     return;
@@ -106,6 +112,15 @@ static void send_beacon(struct rtimer * rt, void * ptr) {
     radio_is_on = 1;
   }
 
+  packetbuf_set_addr(PACKETBUF_ADDR_SENDER, &linkaddr_node_addr);
+  if (packetbuf_copyfrom(&beacon, sizeof(ccmac_beacon_packet_t)) != sizeof(ccmac_beacon_packet_t)) {
+    PRINTF("send_beacon: Copy into packetbuf failed.\n");
+  }
+
+  if (NETSTACK_FRAMER.create() < 0) {
+    PRINTF("send_beacon: Framer failed.\n");
+  }
+
   if (!NETSTACK_RADIO.channel_clear() || NETSTACK_RADIO.receiving_packet() ||
       NETSTACK_RADIO.pending_packet()) {
     PRINTF("send_beacon: Skipping beacon - other activity detected.\n");
@@ -115,17 +130,35 @@ static void send_beacon(struct rtimer * rt, void * ptr) {
     return;
   }
 
-  if (NETSTACK_RADIO.send(&beacon, sizeof(ccmac_beacon_packet_t)) != RADIO_TX_OK) {
+  if (NETSTACK_RADIO.send(packetbuf_hdrptr(), packetbuf_totlen()) != RADIO_TX_OK) {
     PRINTF("send_beacon: Beacon send failed.\n");
   }
   else {
     PRINTF("send_beacon: Beacon sent.\n");
+    #if DEBUG
+    leds_toggle(LEDS_GREEN);
+    #endif
   }
 
   radio_is_in_use = 0;
   NETSTACK_RADIO.off();
   radio_is_on = 0;
   return;
+}
+
+
+PROCESS(wait_for_beacon_process, "Process that waits for a beacon");
+PROCESS_THREAD(wait_for_beacon_process, ev, data) {
+  PROCESS_BEGIN();
+
+  PROCESS_WAIT_EVENT_UNTIL(sink_is_awake);
+  PRINTF("wait_for_beacon_process: Beacon heard, sink is awake.\n");
+  #if DEBUG
+  leds_toggle(LEDS_RED);
+  #endif
+  sink_is_awake = 0;
+  mac_call_sent_callback(_sent_callback, _ptr, MAC_TX_OK, 1);
+  PROCESS_END();
 }
 
 /*------------------RDC driver functions---------------------*/
@@ -141,22 +174,49 @@ static void init(void) {
   on();
 }
 
-/* Should send one packet (source node operation) 
+/* Sends one packet (source node operation) 
    This function assumes that there is a listening sink within range.
    To have the node wait for a beacon, use send_list.
 */
 static void send(mac_callback_t sent_callback, void *ptr) {
+  PRINTF("send: Packets to send.\n");
+  if (radio_is_in_use) {
+    mac_call_sent_callback(sent_callback, ptr, MAC_TX_DEFERRED, 1);
+    return;
+  }
+
+  process_start(&wait_for_beacon_process, NULL);
+  
   return;
 }
 
-/* Should send a list of packets (source node operation).
+/* Sends a list of packets (source node operation).
    As part of this process, the node will wait for a suitable beacon from a sink.
  */
 static void send_list(mac_callback_t sent_callback, void *ptr, struct rdc_buf_list *list) {
+  PRINTF("send_list: Packets to send.\n");
+  if (radio_is_in_use) {
+    PRINTF("send_list: Radio in use, deferring transmission.\n");
+    mac_call_sent_callback(sent_callback, ptr, MAC_TX_DEFERRED, 1);
+    return;
+  }
+
+  _sent_callback = sent_callback;
+  _ptr = ptr;
+  process_start(&wait_for_beacon_process, NULL);
+  
   return;
 }
 
 static void input(void) {
+  PRINTF("input: Handed packet from radio.\n");
+  sink_is_awake = 1;
+  if (process_is_running(&wait_for_beacon_process)) {
+    process_post_synch(&wait_for_beacon_process, PROCESS_EVENT_CONTINUE, NULL);
+  }
+  else {
+    sink_is_awake = 0;
+  }
   return;
 }
 
@@ -169,6 +229,11 @@ static int on(void) {
     rtimer_set(&_beaconTimer, RTIMER_NOW() + _Tbeacon, 1, send_beacon, NULL);
     sink_is_beaconing = 1;
     return 0;
+  }
+  else {
+    PRINTF("on: Turning on radio.\n");
+    radio_is_on = 1;
+    NETSTACK_RADIO.on();
   }
   return 1;
 }

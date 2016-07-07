@@ -48,7 +48,6 @@
 #include "net/linkaddr.h"
 
 typedef struct ccmac_beacon_packet {
-  linkaddr_t sink_addr;
   clock_time_t beacon_interval;
 } ccmac_beacon_packet_t;
 
