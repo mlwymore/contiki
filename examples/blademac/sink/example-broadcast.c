@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, Swedish Institute of Computer Science.
+ * Copyright (c) 2007, Swedish Institute of Computer Science.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -32,25 +32,47 @@
 
 /**
  * \file
- *         Header file for the CC-MAC radio duty cycling protocol, adapted from contikimac.h
+ *         Testing the broadcast layer in Rime
  * \author
- *         Mat Wymore <mlwymore@gmail.com>
  *         Adam Dunkels <adam@sics.se>
  */
 
-#ifndef CCMAC_H
-#define CCMAC_H
-
-#include "sys/rtimer.h"
-#include "net/mac/rdc.h"
-#include "dev/radio.h"
+#include "contiki.h"
 #include "net/rime/rime.h"
-#include "net/linkaddr.h"
+#include "random.h"
 
-typedef struct ccmac_beacon_payload {
-  clock_time_t beacon_interval;
-} ccmac_beacon_payload_t;
+#include "dev/button-sensor.h"
 
-extern const struct rdc_driver ccmac_driver;
+#include "dev/leds.h"
 
-#endif /* CCMAC_H */
+#include <stdio.h>
+
+/*---------------------------------------------------------------------------*/
+PROCESS(example_broadcast_process, "Broadcast example");
+AUTOSTART_PROCESSES(&example_broadcast_process);
+/*---------------------------------------------------------------------------*/
+static void
+broadcast_recv(struct broadcast_conn *c, const linkaddr_t *from)
+{
+  printf("broadcast message received from %d.%d: '%s'\n",
+         from->u8[0], from->u8[1], (char *)packetbuf_dataptr());
+}
+static const struct broadcast_callbacks broadcast_call = {broadcast_recv};
+static struct broadcast_conn broadcast;
+/*---------------------------------------------------------------------------*/
+PROCESS_THREAD(example_broadcast_process, ev, data)
+{
+
+  PROCESS_EXITHANDLER(broadcast_close(&broadcast);)
+
+  PROCESS_BEGIN();
+
+  broadcast_open(&broadcast, 129, &broadcast_call);
+ 
+  while (1) {
+    PROCESS_YIELD();
+  }
+
+  PROCESS_END();
+}
+/*---------------------------------------------------------------------------*/

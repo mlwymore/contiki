@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, Swedish Institute of Computer Science.
+ * Copyright (c) 2009, Swedish Institute of Computer Science.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,31 +26,20 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * This file is part of the Contiki operating system.
- *
  */
 
 /**
  * \file
- *         Header file for the CC-MAC radio duty cycling protocol, adapted from contikimac.h
+ *         Packet queue for ccmac. Use in the MAC layer.
  * \author
- *         Mat Wymore <mlwymore@gmail.com>
- *         Adam Dunkels <adam@sics.se>
+ *         Mat Wymore <mlwymore@iastate.edu>
  */
 
-#ifndef CCMAC_H
-#define CCMAC_H
+#ifndef CCMAC_PACKETQUEUE_H_
+#define CCMAC_PACKETQUEUE_H_
 
-#include "sys/rtimer.h"
-#include "net/mac/rdc.h"
-#include "dev/radio.h"
-#include "net/rime/rime.h"
-#include "net/linkaddr.h"
+#include "net/mac/mac.h"
 
-typedef struct ccmac_beacon_payload {
-  clock_time_t beacon_interval;
-} ccmac_beacon_payload_t;
+extern const struct mac_driver ccmac_packetqueue_driver;
 
-extern const struct rdc_driver ccmac_driver;
-
-#endif /* CCMAC_H */
+#endif
