@@ -98,6 +98,9 @@ static volatile uint8_t sink_is_beaconing = 0;
 static volatile uint8_t sink_is_awake = 0;
 static volatile uint8_t packetbuf_locked = 0;
 static volatile uint8_t sending_burst;
+static volatile uint8_t receiving_burst;
+
+static uint8_t tx_counter = 0;
 
 /* Used to allow process to call MAC callback */
 static mac_callback_t _sent_callback;
@@ -106,12 +109,38 @@ static void * _ptr;
 static uint8_t _backupPacketbuf[PACKETBUF_SIZE];
 static uint8_t _backupPacketbufLen;
 
+PROCESS(wait_to_send_process, "Process that waits for a go-ahead signal");
+static int off(int keep_radio_on);
+
 static void turn_radio_off(void * ptr) {
   PRINTF("turn_radio_off: Turning off.\n");
+  process_exit(&wait_to_send_process);
   packetbuf_locked = 0;
   NETSTACK_RADIO.off();
   sink_is_awake = 0;
   sending_burst = 0;
+  receiving_burst = 0;
+  tx_counter = 0;
+  _backupPacketbufLen = 0;
+}
+
+static void retry_packet(void * ptr) {
+  uint8_t max_txs;
+  if (packetbuf_attr(PACKETBUF_ATTR_MAX_MAC_TRANSMISSIONS) == 0) {
+    max_txs = 1;
+  }
+  else {
+    max_txs = packetbuf_attr(PACKETBUF_ATTR_MAX_MAC_TRANSMISSIONS);
+  }
+  if (tx_counter >= max_txs) {
+    PRINTF("retry_packet: max transmissions have failed, canceling\n");
+    turn_radio_off(NULL);
+    mac_call_sent_callback(_sent_callback, _ptr, MAC_TX_NOACK, tx_counter);
+    return;
+  }
+
+  process_post_synch(&wait_to_send_process, PROCESS_EVENT_CONTINUE, NULL);
+  return;
 }
 
 static int send_packet() {
@@ -151,6 +180,11 @@ static void send_beacon(struct rtimer * rt, void * ptr) {
   // Reset timer for next beacon
   rtimer_set(&_beaconTimer, RTIMER_TIME(&_beaconTimer) + _Tbeacon, 1, send_beacon, NULL);
 
+  if (receiving_burst) {
+    PRINTF("send_beacon: Skipping beacon - receiving a burst.\n");
+    return;
+  }
+
   // If the radio is in use, don't send a beacon
   if (packetbuf_locked) {
     PRINTF("send_beacon: Skipping beacon - packetbuf locked.\n");
@@ -184,90 +218,74 @@ static void send_beacon(struct rtimer * rt, void * ptr) {
   return;
 }
 
-
-
-/*static void send_packets(struct rdc_buf_list *buf_list) {
-  struct rdc_buf_list *curr;
-  struct rdc_buf_list *next;
-  int pending;
-
-  if (radio_is_in_use) {
-    mac_call_sent_callback(_sent_callback, _ptr, MAC_TX_COLLISION, 1);
-    return;
-  }
-  radio_is_in_use = 1;
-  //Need to wait for ACK in here somewhere!
-  curr = buf_list;
-  do {
-    next = list_item_next(curr);
-    queuebuf_to_packetbuf(curr->buf);
-    pending = packetbuf_attr(PACKETBUF_ATTR_PENDING);
-    ret = send_packet(_sent_callback, _ptr, curr);
-    if (ret != MAC_TX_DEFERRED) {
-      mac_call_sent_callback(_sent_callback, _ptr, ret, 1);
-    }
-
-    if (ret == MAC_TX_OK) {
-      if (next != NULL) {
-        curr = next;
-      }
-    }
-    else {
-      next = NULL;
-    }
-  } while ((next != NULL) && pending);
-
-  radio_is_in_use = 0;
-}*/
-
-PROCESS(wait_to_send_process, "Process that waits for a go-ahead signal");
 PROCESS_THREAD(wait_to_send_process, ev, data) {
   PROCESS_BEGIN();
 
   static struct rdc_buf_list *curr;
   static struct rdc_buf_list *next;
   static int ret;
-  static int pending;
+  //static int pending;
+  static int old_packet;
+  static uint16_t *pktSeqno;
 
-  curr = data;
+  if (data != NULL) {
+    curr = data;
+  }
 
-  do {
-    PROCESS_WAIT_EVENT_UNTIL(sink_is_awake && ev == PROCESS_EVENT_POLL);
-    PRINTF("wait_to_send_process: Time to send!\n");
-    #if LEDS
-    leds_toggle(LEDS_RED);
-    #endif
-    if (packetbuf_locked) {
-      PRINTF("wait_to_send_process: Packetbuf locked, waiting.\n");
-      continue;
-    }
+  old_packet = 0;
 
-    packetbuf_locked = 1;
-    next = list_item_next(curr);
-    queuebuf_to_packetbuf(curr->buf);
-    /*if (next != NULL) {
-      packetbuf_set_attr(PACKETBUF_ATTR_PENDING, 1);
-    }
-    packetbuf_set_attr(PACKETBUF_ATTR_PACKET_TYPE, PACKETBUF_ATTR_PACKET_TYPE_DATA);*/
-    pending = packetbuf_attr(PACKETBUF_ATTR_PENDING);
-    ret = send_packet();
-    mac_call_sent_callback(_sent_callback, _ptr, ret, 1);
-    packetbuf_locked = 0;
+    do {
+      PROCESS_WAIT_EVENT_UNTIL(sink_is_awake && ev == PROCESS_EVENT_CONTINUE);
+      ctimer_stop(&_offTimer);
 
-    ctimer_set(&_offTimer, INTER_PACKET_DEADLINE, turn_radio_off, NULL);
-
-    if (ret == MAC_TX_OK) {
-      if (next != NULL) {
-        curr = next;
+      /* if we've tried this packet already and the tx count is 0, 
+         then we must got an ack, so we ready a new packet */
+      if (old_packet && tx_counter == 0) {
+        if (next != NULL) {
+          curr = next;
+          old_packet = 0;
+        }
+        else {
+          break;
+        }
       }
-    }
-    else {
-      next = NULL;
-    } 
-  } while ((next != NULL) && pending);
 
-  sending_burst = 0;
+      tx_counter++;
+      old_packet = 1;
 
+      PRINTF("wait_to_send_process: Time to send!\n");
+      #if LEDS
+      leds_toggle(LEDS_RED);
+      #endif
+
+      if (packetbuf_locked) {
+        PRINTF("wait_to_send_process: Packetbuf locked, waiting.\n");
+        ctimer_set(&_offTimer, INTER_PACKET_DEADLINE, retry_packet, NULL);
+        continue;
+      }
+
+      packetbuf_locked = 1;
+      next = list_item_next(curr);
+      queuebuf_to_packetbuf(curr->buf);
+      //PRINTF("wait_to_send_process: seqno %u loaded\n", packetbuf_attr(PACKETBUF_ATTR_MAC_SEQNO));
+      //pending = packetbuf_attr(PACKETBUF_ATTR_PENDING);
+      ret = send_packet();
+      packetbuf_locked = 0;
+
+      if (ret == MAC_TX_ERR_FATAL || ret == MAC_TX_ERR) {
+        pktSeqno = (uint16_t *)_ptr;
+        *pktSeqno = packetbuf_attr(PACKETBUF_ATTR_MAC_SEQNO);
+        mac_call_sent_callback(_sent_callback, _ptr, MAC_TX_ERR_FATAL, 1);
+        off(0);
+        break;
+      }
+
+      ctimer_set(&_offTimer, INTER_PACKET_DEADLINE, retry_packet, NULL);
+      
+    } while (1);
+
+  //sending_burst = 0;
+  turn_radio_off(NULL);
   PROCESS_END();
 }
 
@@ -348,6 +366,8 @@ static void send_list(mac_callback_t sent_callback, void *ptr, struct rdc_buf_li
 
 static void input(void) {
   int ret;
+  uint16_t dataSeqno;
+  uint16_t *ackSeqno;
 
   PRINTF("input: Handed packet from radio.\n");
   /* Stay awake for now - listen for another possible packet */
@@ -372,15 +392,19 @@ static void input(void) {
       packetbuf_locked = 0;
       if (process_is_running(&wait_to_send_process)) {
         sink_is_awake = 1;
-        process_poll(&wait_to_send_process);
+        process_post_synch(&wait_to_send_process, PROCESS_EVENT_CONTINUE, NULL);
       }
       break;
     case PACKETBUF_ATTR_PACKET_TYPE_DATA:
-      PRINTF("input: It's data!\n");
+      dataSeqno = packetbuf_attr(PACKETBUF_ATTR_MAC_SEQNO);
+      PRINTF("input: It's data! seqno %d\n", dataSeqno);
+
+      receiving_burst = 1;
 
       /* We are sink, need to respond with ACK */
       linkaddr_t sourceAddr;
       linkaddr_copy(&sourceAddr, packetbuf_addr(PACKETBUF_ADDR_SENDER));
+      
       if (_backupPacketbufLen != 0) {
         PRINTF("input: Overwriting saved packetbuf to send ack.\n");
       }
@@ -392,6 +416,7 @@ static void input(void) {
       packetbuf_set_addr(PACKETBUF_ADDR_SENDER, &linkaddr_node_addr);
       packetbuf_set_addr(PACKETBUF_ADDR_RECEIVER, &sourceAddr);
       packetbuf_set_attr(PACKETBUF_ATTR_PACKET_TYPE, PACKETBUF_ATTR_PACKET_TYPE_ACK);
+      packetbuf_set_attr(PACKETBUF_ATTR_MAC_SEQNO, dataSeqno);
       //memcpy(packetbuf_dataptr(), "ACK", 3);
       //memcpy(packetbuf_dataptr(), &beacon, sizeof(ccmac_beacon_payload_t));
 
@@ -416,12 +441,19 @@ static void input(void) {
       packetbuf_locked = 0;
       break;
     case PACKETBUF_ATTR_PACKET_TYPE_ACK:
-      PRINTF("input: It's an ack!\n");
+      PRINTF("input: It's an ack! _ptr is %d\n", (int)_ptr);
+      /* Use the seqno to ID the packet instead of loading it back into packetbuf */
+      ackSeqno = (uint16_t *)_ptr;
+      *ackSeqno = packetbuf_attr(PACKETBUF_ATTR_MAC_SEQNO);
       packetbuf_locked = 0;
+      tx_counter = 0;
+
+      mac_call_sent_callback(_sent_callback, _ptr, MAC_TX_OK, 1);
+
       if (!sending_burst) {
         turn_radio_off(NULL);
       }
-      process_poll(&wait_to_send_process);
+      process_post_synch(&wait_to_send_process, PROCESS_EVENT_CONTINUE, NULL);
       break;
   }
   return;
@@ -447,8 +479,9 @@ static int on(void) {
 /* If sink, stop regular beaconing (i.e. stop beacon timer).
    If source, just turn off radio. */
 static int off(int keep_radio_on) {
-  if (IS_SINK) {
-    sink_is_beaconing = 0;
+  sink_is_beaconing = 0;
+  if (!keep_radio_on) {
+    turn_radio_off(NULL);
   }
   return 1;
 }

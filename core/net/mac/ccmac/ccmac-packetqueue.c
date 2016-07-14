@@ -53,7 +53,7 @@
 #define MAX_QUEUED_PACKETS QUEUEBUF_NUM
 #define MAX_MAC_TRANSMISSIONS 3
 
-#define DEBUG 1
+#define DEBUG 0
 
 #if DEBUG
 #include <stdio.h>
@@ -64,6 +64,9 @@
 #define PRINTADDR(addr)
 #endif
 
+//static uint16_t const *callback_seqno;
+static volatile uint16_t callback_seqno;
+static volatile uint16_t last_sent_seqno;
 static int off(int keep_radio_on);
 
 struct qbuf_metadata {
@@ -89,6 +92,7 @@ static void packet_done(struct rdc_buf_list *packet, int status) {
   queuebuf_free(packet->buf);
   memb_free(&metadata_memb, metadata);
   memb_free(&packet_memb, packet);
+  PRINTF("ccmac-packetqueue: packet removed from queue and freed\n");
   //TODO: correctly track number of transmissions
   mac_call_sent_callback(sent_callback, cptr, status, 1);
   return;
@@ -96,59 +100,80 @@ static void packet_done(struct rdc_buf_list *packet, int status) {
 
 static void packet_sent(void *ptr, int status, int num_transmissions) {
   struct rdc_buf_list *packet;
-
-  for (packet = list_head(packet_list); packet != NULL; packet = list_item_next(packet_list)) {
-    if (queuebuf_attr(packet->buf, PACKETBUF_ATTR_MAC_SEQNO) == packetbuf_attr(PACKETBUF_ATTR_MAC_SEQNO)) {
-      break;
-    }
-  }
-
-  if (packet == NULL) {
-    PRINTF("ccmac-packetqueue: seqno %d not found\n", packetbuf_attr(PACKETBUF_ATTR_MAC_SEQNO));
-    return;
-  }
-  else if (packet->ptr == NULL) {
-    PRINTF("ccmac-packetqueue: no metadata\n");
-    return;
-  }
+  uint16_t *ackSeqno;
+  ackSeqno = (uint16_t *)ptr;
+  int try_again = 0;
+  
+  //PRINTF("ccmac-packetqueue: callback entered, ptr is %d, seqno is %d\n", (int)ptr, *ackSeqno);
 
   switch(status) {
   case MAC_TX_OK:
+    if (*ackSeqno == last_sent_seqno) {
+      try_again = 1;
+    }
+  case MAC_TX_ERR_FATAL:
+
+    for (packet = list_head(packet_list); packet != NULL; packet = list_item_next(packet)) {
+      if (queuebuf_attr(packet->buf, PACKETBUF_ATTR_MAC_SEQNO) == *ackSeqno) {
+        break;
+      }
+    }
+
+    if (packet == NULL) {
+      PRINTF("ccmac-packetqueue: seqno %d not found\n", 
+                   packetbuf_attr(PACKETBUF_ATTR_MAC_SEQNO));
+      return;
+    }
+    else if (packet->ptr == NULL) {
+      PRINTF("ccmac-packetqueue: no metadata\n");
+      return;
+    }
+
+    /* Load packet into packetbuf for the callback */
+    PRINTF("ccmac-packetqueue: loading packet into packetbuf for callback\n");
+    queuebuf_to_packetbuf(packet->buf);
+
     packet_done(packet, status);
     break;
   case MAC_TX_NOACK:
-    packet_done(packet, status);
-    break;
   case MAC_TX_COLLISION:
-    break;
   case MAC_TX_DEFERRED:
+    try_again = 1;
     break;
-  case MAC_TX_ERR_FATAL:
-    off(0);
   default:
-    packet_done(packet, status);
+    break;
+  }
+  if (try_again && list_length(packet_list) >= QUEUEBUF_THRESHOLD) {
+    last_sent_seqno = queuebuf_attr(((struct rdc_buf_list *)list_tail(packet_list))->buf, PACKETBUF_ATTR_MAC_SEQNO);
+    PRINTF("ccmac-packetqueue: trying again with %d packets, threshold %d\n", list_length(packet_list), QUEUEBUF_THRESHOLD);
+    NETSTACK_RDC.send_list(packet_sent, (void *)&callback_seqno, list_head(packet_list));
   }
 }
 
 /*---------------------------------------------------------------------------*/
 static void init(void) {
+  PRINTF("ccmac-packetqueue: initializing\n");
   memb_init(&packet_memb);
   memb_init(&metadata_memb);
   list_init(packet_list);
+  //memset((void *)callback_seqno, 0, sizeof(uint16_t));
 }
 
 static void send(mac_callback_t sent_callback, void *ptr) {
   static uint16_t seqno;
   static uint8_t initialized = 0;
+  static uint16_t max_txs = 0;
 
   /* As per csma.c */
   if (!initialized) {
     initialized = 1;
-    seqno = random_rand();
+    //seqno = random_rand();
+    seqno = 10;
   }
   if (seqno == 0) {
     seqno++;
   }
+  PRINTF("ccmac-packetqueue: queueing seqno %u, ptr is %d\n", seqno, (int)&callback_seqno);
   packetbuf_set_attr(PACKETBUF_ATTR_MAC_SEQNO, seqno++);
 
   struct rdc_buf_list *packet;
@@ -157,22 +182,25 @@ static void send(mac_callback_t sent_callback, void *ptr) {
     if (packet != NULL) {
       packet->ptr = memb_alloc(&metadata_memb);
       if (packet->ptr != NULL) {
+        if (packetbuf_attr(PACKETBUF_ATTR_MAX_MAC_TRANSMISSIONS) == 0) {
+          max_txs = MAX_MAC_TRANSMISSIONS;
+        }
+        else {
+          max_txs = packetbuf_attr(PACKETBUF_ATTR_MAX_MAC_TRANSMISSIONS);
+        }
+        packetbuf_set_attr(PACKETBUF_ATTR_MAX_MAC_TRANSMISSIONS, max_txs);
         packet->buf = queuebuf_new_from_packetbuf();
         if (packet->buf != NULL) {
           struct qbuf_metadata *metadata = (struct qbuf_metadata *)packet->ptr;
-          if (packetbuf_attr(PACKETBUF_ATTR_MAX_MAC_TRANSMISSIONS) == 0) {
-            metadata->max_transmissions = MAX_MAC_TRANSMISSIONS;
-          }
-          else {
-            metadata->max_transmissions = packetbuf_attr(PACKETBUF_ATTR_MAX_MAC_TRANSMISSIONS);
-          }
+          metadata->max_transmissions = max_txs;
           metadata->sent = sent_callback;
           metadata->cptr = ptr;
           list_add(packet_list, packet);
-          //TODO: when should send?
+          /* Send all packets when the queue length is above a threshold */
           if (list_length(packet_list) >= QUEUEBUF_THRESHOLD) {
+            last_sent_seqno = seqno;
             PRINTF("ccmac-packetqueue: sending %d packets, threshold %d\n", list_length(packet_list), QUEUEBUF_THRESHOLD);
-            NETSTACK_RDC.send_list(packet_sent, ptr, list_head(packet_list));
+            NETSTACK_RDC.send_list(packet_sent, (void *)&callback_seqno, list_head(packet_list));
           }
           return;
         }
