@@ -70,15 +70,15 @@ PROCESS_THREAD(example_broadcast_process, ev, data)
   PROCESS_BEGIN();
 
   /* Start powertracing, once every two seconds. */
-  powertrace_start(CLOCK_SECOND * 2);
+  powertrace_start(CLOCK_SECOND * 6);
 
 
   broadcast_open(&broadcast, 129, &broadcast_call);
 
   while(1) {
 
-    /* Delay 2-4 seconds */
-    etimer_set(&et, CLOCK_SECOND * 4 + random_rand() % (CLOCK_SECOND * 4));
+    /* Delay a few seconds */
+    etimer_set(&et, CLOCK_SECOND * 1 + random_rand() % (CLOCK_SECOND * 4));
 
     PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&et));
 

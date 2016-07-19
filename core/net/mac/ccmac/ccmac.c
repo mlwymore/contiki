@@ -63,6 +63,14 @@
 #define PRINTDEBUG(...)
 #endif
 
+#define LIMITED_DEBUG 0
+#if LIMITED_DEBUG
+#include <stdio.h>
+#define LIM_PRINTF(...) printf(__VA_ARGS__)
+#else
+#define LIM_PRINTF(...)
+#endif
+
 #ifdef CCMAC_CONF_IS_SINK
 #define IS_SINK CCMAC_CONF_IS_SINK
 #else
@@ -131,44 +139,60 @@ static int off(int keep_radio_on);
 static void send_beacon(struct rtimer * rt, void * ptr);
 
 static void turn_radio_off(struct rtimer * rt, void * ptr) {
-  rtimer_clock_t time;
   rtimer_clock_t now;
-  //uint8_t * argPtr = (uint8_t *)ptr;
-  //if (ptr == NULL || *argPtr == last_radio_off_caller) {
-    //last_radio_off_caller = ROFF_CANCEL;
-    PRINTF("turn_radio_off: Turning off.\n");
-    process_exit(&wait_to_send_process);
-    packetbuf_locked = 0;
-    NETSTACK_RADIO.off();
+  uint8_t beacon_intervals;
+  int32_t temp_time;
+
+  PRINTF("turn_radio_off: Turning off.\n");
+  process_exit(&wait_to_send_process);
+  packetbuf_locked = 0;
+  NETSTACK_RADIO.off();
 #if COMPOWER_ON
-    if (radio_is_on) {
-      compower_accumulate(&compower_idle_activity);
-    }
+  if (radio_is_on) {
+    compower_accumulate(&compower_idle_activity);
+  }
 #endif
-    radio_is_on = 0;
-    sink_is_awake = 0;
-    sending_burst = 0;
-    receiving_burst = 0;
-    tx_counter = 0;
-    _backupPacketbufLen = 0;
-  //}
+  radio_is_on = 0;
+  sink_is_awake = 0;
+  sending_burst = 0;
+  receiving_burst = 0;
+  tx_counter = 0;
+  _backupPacketbufLen = 0;
+  
   rtimer_unset();
+  /* Set timer for the next beacon */
   if (IS_SINK && sink_is_beaconing) {
-    time = RTIMER_TIME(&_beaconTimer) + _Tbeacon;
-    now = RTIMER_NOW();
-    while (time < now) {
-      time += _Tbeacon;
-    }
-    rtimer_set(&_beaconTimer, time, 1, send_beacon, NULL);
+    /* Possible we have to go multiple beacon intervals forward from the last beacon timer expiration*/
+    beacon_intervals = 1;
+    temp_time = 0;
+    do {
+      temp_time = RTIMER_TIME(&_beaconTimer) + _Tbeacon * beacon_intervals;
+      /* Since rtimer_clock_t is 16-bit, we can easily have rollover problems */
+      /* This solution is kind of hacky. */
+      if (temp_time > 65535) {
+        LIM_PRINTF("cc-mac: Beacon timer rollover\n");
+        temp_time -= 65535;
+        now = RTIMER_NOW();
+        /* If rtimer is currently at a higher tick than the last time the beacon timer expired,
+           then almost certainly that means the next beacon time is after the rollover, but
+           the rollover hasn't happened yet. Otherwise, the rollover has already happened and we
+           need to keep adding beacon intervals if temp_time is less than now.
+           There may be some really weird edge case where all this isn't true - not sure. */
+        if (now > RTIMER_TIME(&_beaconTimer)) {
+          break;
+        }
+      }
+      beacon_intervals++;
+      now = RTIMER_NOW();
+    } while (temp_time < now);
+    LIM_PRINTF("cc-mac: Setting beacon timer for %u (now is %u)\n", (uint16_t)temp_time, now);
+    rtimer_set(&_beaconTimer, (rtimer_clock_t)temp_time, 1, send_beacon, NULL);
   }
 }
 
 static void retry_packet(struct rtimer * rt, void * ptr) {
   uint8_t max_txs;
-  //if (!do_retry_packet) {
-  //  return;
-  //}
-  //do_retry_packet = 0;
+
   if (packetbuf_attr(PACKETBUF_ATTR_MAX_MAC_TRANSMISSIONS) == 0) {
     max_txs = 1;
   }
@@ -258,9 +282,8 @@ static void send_beacon(struct rtimer * rt, void * ptr) {
   #if LEDS
   leds_toggle(LEDS_GREEN);
   #endif
-  //radio_off_arg = ROFF_SEND_BEACON;
+
   rtimer_set(&_offTimer, RTIMER_NOW() + INTER_PACKET_DEADLINE, 1, turn_radio_off, NULL);
-  //last_radio_off_caller = ROFF_SEND_BEACON;
 
   return;
 }
@@ -271,7 +294,7 @@ PROCESS_THREAD(wait_to_send_process, ev, data) {
   static struct rdc_buf_list *curr;
   static struct rdc_buf_list *next;
   static int ret;
-  //static int pending;
+
   static int old_packet;
   static uint16_t *pktSeqno;
 
@@ -283,7 +306,7 @@ PROCESS_THREAD(wait_to_send_process, ev, data) {
 
     do {
       PROCESS_WAIT_EVENT_UNTIL(sink_is_awake && ev == PROCESS_EVENT_CONTINUE);
-      //do_retry_packet = 0;
+
       rtimer_unset();
 
       /* if we've tried this packet already and the tx count is 0, 
@@ -309,15 +332,14 @@ PROCESS_THREAD(wait_to_send_process, ev, data) {
       if (packetbuf_locked) {
         PRINTF("wait_to_send_process: Packetbuf locked, waiting.\n");
         rtimer_set(&_offTimer, RTIMER_NOW() + INTER_PACKET_DEADLINE, 1, retry_packet, NULL);
-        //do_retry_packet = 1;
+
         continue;
       }
 
       packetbuf_locked = 1;
       next = list_item_next(curr);
       queuebuf_to_packetbuf(curr->buf);
-      //PRINTF("wait_to_send_process: seqno %u loaded\n", packetbuf_attr(PACKETBUF_ATTR_MAC_SEQNO));
-      //pending = packetbuf_attr(PACKETBUF_ATTR_PENDING);
+
       ret = send_packet();
       packetbuf_locked = 0;
 
@@ -330,11 +352,9 @@ PROCESS_THREAD(wait_to_send_process, ev, data) {
       }
 
       rtimer_set(&_offTimer, RTIMER_NOW() + INTER_PACKET_DEADLINE, 1, retry_packet, NULL);
-      //do_retry_packet = 1;
       
     } while (1);
 
-  //sending_burst = 0;
   turn_radio_off(NULL, NULL);
   PROCESS_END();
 }
@@ -366,8 +386,7 @@ static void send(mac_callback_t sent_callback, void *ptr) {
 }
 
 /* Sends a list of packets (source node operation).
-   As part of this process, the node will wait for a suitable beacon from a sink.
- */
+   As part of this process, the node will wait for a suitable beacon from a sink. */
 static void send_list(mac_callback_t sent_callback, void *ptr, struct rdc_buf_list *buf_list) {
   struct rdc_buf_list *curr;
   struct rdc_buf_list *next;
@@ -422,7 +441,6 @@ static void input(void) {
 
   PRINTF("input: Handed packet from radio.\n");
   /* Stay awake for now - listen for another possible packet */
-  //last_radio_off_caller = ROFF_CANCEL;
   rtimer_unset();
 
   /* Check if the packetbuf is locked, but I think we need to go ahead anyway */
@@ -434,9 +452,7 @@ static void input(void) {
   if (NETSTACK_FRAMER.parse() < 0) {
     PRINTF("input: Framer failed to parse packet.\n");
     packetbuf_locked = 0;
-    //radio_off_arg = ROFF_INPUT_PARSE_FAIL;
     rtimer_set(&_offTimer, RTIMER_NOW() + INTER_PACKET_DEADLINE, 1, turn_radio_off, NULL);
-    //last_radio_off_caller = ROFF_INPUT_PARSE_FAIL;
     return;
   }
 
@@ -486,9 +502,7 @@ static void input(void) {
         PRINTF("input: Ack send failed.\n");
       }
       if (!packetbuf_attr(PACKETBUF_ATTR_PENDING)) {
-        //radio_off_arg = ROFF_INPUT_LAST_ACK_SENT;
         rtimer_set(&_offTimer, RTIMER_NOW() + INTER_PACKET_DEADLINE, 1, turn_radio_off, NULL);
-        //last_radio_off_caller = ROFF_INPUT_LAST_ACK_SENT;
       }
 
       packetbuf_copyfrom(_backupPacketbuf, _backupPacketbufLen);
@@ -518,8 +532,7 @@ static void input(void) {
 }
 
 /* If sink, turn on regular beaconing (i.e. start beacon timer).
-   If source, check length of packet queue and send if Q > 0.
-*/
+   If source, check length of packet queue and send if Q > 0. */
 static int on(void) {
   if (IS_SINK) {
     PRINTF("on: Sink, starting beaconing.\n");

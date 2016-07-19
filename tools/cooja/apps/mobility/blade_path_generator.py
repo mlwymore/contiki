@@ -2,9 +2,9 @@ import os
 import time
 import numpy as np
 import math
-import matplotlib.pyplot as plt
 
 r = 50 #blade length
+z = 8 #blade/tower clearance
 T = 6 #10 hz
 
 step = 0.001 #1 ms
@@ -21,11 +21,12 @@ with open(filename, 'w') as file:
 	vfunc = np.vectorize(math.cos)
 	ys = r*vfunc(thetas)
 
-	xs = xs + 50
-	ys = 50 - ys
+	xs = xs + r
+	ys = r - ys
 	
+	file.write('1 0 ' + str(r) + ' ' + str(2*r) + ' 0\n')
 	for i in range(len(xs)):
-		file.write('1 ' + str(i*step) + ' ' + str(xs[i]) + ' ' + str(ys[i]) + '\n')
+		file.write('0 ' + str(i*step) + ' ' + str(xs[i]) + ' ' + str(ys[i]) + ' ' + str(z) + '\n')
 	
 	
 	

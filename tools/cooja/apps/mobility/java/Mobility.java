@@ -46,7 +46,7 @@ import org.contikios.cooja.PluginType;
 import org.contikios.cooja.Simulation;
 import org.contikios.cooja.TimeEvent;
 import org.contikios.cooja.VisPlugin;
-import org.contikios.cooja.dialogs.MessageList;
+import org.contikios.cooja.dialogs.MessageListUI;
 import org.contikios.cooja.interfaces.Position;
 import org.contikios.cooja.util.StringUtils;
 
@@ -67,7 +67,7 @@ public class Mobility extends VisPlugin {
 
   private File filePositions = null;
 
-  private MessageList log = new MessageList();
+  private MessageListUI log = new MessageListUI();
 
   public Mobility(Simulation simulation, final Cooja gui) {
     super("Mobility", gui, false);
@@ -129,6 +129,7 @@ public class Mobility extends VisPlugin {
         e.time = (long) (Double.parseDouble(args[1])*1000.0*Simulation.MILLISECOND); /* s -> us */
         e.posX = Double.parseDouble(args[2]);
         e.posY = Double.parseDouble(args[3]);
+        e.posZ = Double.parseDouble(args[4]);
 
         entriesList.add(e);
       }
@@ -171,7 +172,7 @@ public class Mobility extends VisPlugin {
       if (move.moteIndex < simulation.getMotesCount()) {
         Mote mote = simulation.getMote(move.moteIndex);
         Position pos = mote.getInterfaces().getPosition();
-        pos.setCoordinates(move.posX, move.posY, pos.getZCoordinate());
+        pos.setCoordinates(move.posX, move.posY, move.posZ);
         /*logger.info(simulation.getSimulationTimeMillis() + ": Executing " + move);*/
       } else {
         /*log.addMessage(simulation.getSimulationTimeMillis() + ": Bad move, no mote " + move.moteIndex);
@@ -201,10 +202,10 @@ public class Mobility extends VisPlugin {
   class Move {
     long time;
     int moteIndex;
-    double posX, posY;
+    double posX, posY, posZ;
 
     public String toString() {
-      return "MOVE: mote " + moteIndex + " -> [" + posX + "," + posY + "] @ " + time/Simulation.MILLISECOND;
+      return "MOVE: mote " + moteIndex + " -> [" + posX + "," + posY + "," + posZ + "] @ " + time/Simulation.MILLISECOND;
     }
   }
   
