@@ -38,6 +38,8 @@
  */
 
 #define LEDS 0
+#define COMPOWER_ON 0
+#define TRACE_ON 1
 
 #include "contiki-conf.h"
 #include "net/mac/mac.h"
@@ -70,7 +72,7 @@
 #ifdef CCMAC_CONF_INITIAL_TBEACON
 #define INITIAL_TBEACON CCMAC_CONF_INITIAL_TBEACON
 #else
-#define INITIAL_TBEACON RTIMER_ARCH_SECOND/10
+#define INITIAL_TBEACON RTIMER_SECOND/10
 #endif
 
 /* INTER_PACKET_DEADLINE is the maximum time a receiver waits for the
@@ -79,10 +81,14 @@
 #define INTER_PACKET_DEADLINE               CCMAC_CONF_INTER_PACKET_DEADLINE
 #else
 #if DEBUG
-#define INTER_PACKET_DEADLINE               CLOCK_SECOND / 32
+#define INTER_PACKET_DEADLINE               RTIMER_SECOND / 65
 #else
-#define INTER_PACKET_DEADLINE CLOCK_SECOND / 64
+#define INTER_PACKET_DEADLINE               RTIMER_SECOND / 200
 #endif
+#endif
+
+#if COMPOWER_ON
+static struct compower_activity current_packet_compower;
 #endif
 
 /* Same as channel check interval */
@@ -90,9 +96,20 @@ static clock_time_t _Tbeacon;
 
 /* rtimer for beaconing */
 static struct rtimer _beaconTimer;
-/* ctimer for turning radio off after sending */
-static struct ctimer _offTimer;
+/* rtimer for turning radio off after sending */
+static struct rtimer _offTimer;
 
+enum {
+  ROFF_CANCEL,
+  ROFF_SEND_BEACON,
+  ROFF_INPUT_PARSE_FAIL,
+  ROFF_INPUT_LAST_ACK_SENT,
+};
+
+static volatile uint8_t radio_is_on = 0;
+//static volatile uint8_t radio_off_arg = 0;
+//static volatile uint8_t last_radio_off_caller = 0;
+//static volatile uint8_t do_retry_packet = 0;
 
 static volatile uint8_t sink_is_beaconing = 0;
 static volatile uint8_t sink_is_awake = 0;
@@ -111,21 +128,47 @@ static uint8_t _backupPacketbufLen;
 
 PROCESS(wait_to_send_process, "Process that waits for a go-ahead signal");
 static int off(int keep_radio_on);
+static void send_beacon(struct rtimer * rt, void * ptr);
 
-static void turn_radio_off(void * ptr) {
-  PRINTF("turn_radio_off: Turning off.\n");
-  process_exit(&wait_to_send_process);
-  packetbuf_locked = 0;
-  NETSTACK_RADIO.off();
-  sink_is_awake = 0;
-  sending_burst = 0;
-  receiving_burst = 0;
-  tx_counter = 0;
-  _backupPacketbufLen = 0;
+static void turn_radio_off(struct rtimer * rt, void * ptr) {
+  rtimer_clock_t time;
+  rtimer_clock_t now;
+  //uint8_t * argPtr = (uint8_t *)ptr;
+  //if (ptr == NULL || *argPtr == last_radio_off_caller) {
+    //last_radio_off_caller = ROFF_CANCEL;
+    PRINTF("turn_radio_off: Turning off.\n");
+    process_exit(&wait_to_send_process);
+    packetbuf_locked = 0;
+    NETSTACK_RADIO.off();
+#if COMPOWER_ON
+    if (radio_is_on) {
+      compower_accumulate(&compower_idle_activity);
+    }
+#endif
+    radio_is_on = 0;
+    sink_is_awake = 0;
+    sending_burst = 0;
+    receiving_burst = 0;
+    tx_counter = 0;
+    _backupPacketbufLen = 0;
+  //}
+  rtimer_unset();
+  if (IS_SINK && sink_is_beaconing) {
+    time = RTIMER_TIME(&_beaconTimer) + _Tbeacon;
+    now = RTIMER_NOW();
+    while (time < now) {
+      time += _Tbeacon;
+    }
+    rtimer_set(&_beaconTimer, time, 1, send_beacon, NULL);
+  }
 }
 
-static void retry_packet(void * ptr) {
+static void retry_packet(struct rtimer * rt, void * ptr) {
   uint8_t max_txs;
+  //if (!do_retry_packet) {
+  //  return;
+  //}
+  //do_retry_packet = 0;
   if (packetbuf_attr(PACKETBUF_ATTR_MAX_MAC_TRANSMISSIONS) == 0) {
     max_txs = 1;
   }
@@ -134,7 +177,7 @@ static void retry_packet(void * ptr) {
   }
   if (tx_counter >= max_txs) {
     PRINTF("retry_packet: max transmissions have failed, canceling\n");
-    turn_radio_off(NULL);
+    turn_radio_off(NULL, NULL);
     mac_call_sent_callback(_sent_callback, _ptr, MAC_TX_NOACK, tx_counter);
     return;
   }
@@ -177,21 +220,23 @@ static void send_beacon(struct rtimer * rt, void * ptr) {
     return;
   }
 
-  // Reset timer for next beacon
-  rtimer_set(&_beaconTimer, RTIMER_TIME(&_beaconTimer) + _Tbeacon, 1, send_beacon, NULL);
-
   if (receiving_burst) {
     PRINTF("send_beacon: Skipping beacon - receiving a burst.\n");
+    // Reset timer for next beacon
+    rtimer_set(&_beaconTimer, RTIMER_TIME(&_beaconTimer) + _Tbeacon, 1, send_beacon, NULL);
     return;
   }
 
   // If the radio is in use, don't send a beacon
   if (packetbuf_locked) {
     PRINTF("send_beacon: Skipping beacon - packetbuf locked.\n");
+    // Reset timer for next beacon
+    rtimer_set(&_beaconTimer, RTIMER_TIME(&_beaconTimer) + _Tbeacon, 1, send_beacon, NULL);
     return;
   }
 
   packetbuf_locked = 1;
+  radio_is_on = 1;
   NETSTACK_RADIO.on();
 
   packetbuf_clear();
@@ -205,7 +250,7 @@ static void send_beacon(struct rtimer * rt, void * ptr) {
 
   if (ret != MAC_TX_OK) {
     PRINTF("send_beacon: Beacon failed, skipping.\n");
-    turn_radio_off(NULL);
+    turn_radio_off(NULL, NULL);
     return;
   }
 
@@ -213,7 +258,9 @@ static void send_beacon(struct rtimer * rt, void * ptr) {
   #if LEDS
   leds_toggle(LEDS_GREEN);
   #endif
-  ctimer_set(&_offTimer, INTER_PACKET_DEADLINE, turn_radio_off, NULL);
+  //radio_off_arg = ROFF_SEND_BEACON;
+  rtimer_set(&_offTimer, RTIMER_NOW() + INTER_PACKET_DEADLINE, 1, turn_radio_off, NULL);
+  //last_radio_off_caller = ROFF_SEND_BEACON;
 
   return;
 }
@@ -236,7 +283,8 @@ PROCESS_THREAD(wait_to_send_process, ev, data) {
 
     do {
       PROCESS_WAIT_EVENT_UNTIL(sink_is_awake && ev == PROCESS_EVENT_CONTINUE);
-      ctimer_stop(&_offTimer);
+      //do_retry_packet = 0;
+      rtimer_unset();
 
       /* if we've tried this packet already and the tx count is 0, 
          then we must got an ack, so we ready a new packet */
@@ -260,7 +308,8 @@ PROCESS_THREAD(wait_to_send_process, ev, data) {
 
       if (packetbuf_locked) {
         PRINTF("wait_to_send_process: Packetbuf locked, waiting.\n");
-        ctimer_set(&_offTimer, INTER_PACKET_DEADLINE, retry_packet, NULL);
+        rtimer_set(&_offTimer, RTIMER_NOW() + INTER_PACKET_DEADLINE, 1, retry_packet, NULL);
+        //do_retry_packet = 1;
         continue;
       }
 
@@ -280,12 +329,13 @@ PROCESS_THREAD(wait_to_send_process, ev, data) {
         break;
       }
 
-      ctimer_set(&_offTimer, INTER_PACKET_DEADLINE, retry_packet, NULL);
+      rtimer_set(&_offTimer, RTIMER_NOW() + INTER_PACKET_DEADLINE, 1, retry_packet, NULL);
+      //do_retry_packet = 1;
       
     } while (1);
 
   //sending_burst = 0;
-  turn_radio_off(NULL);
+  turn_radio_off(NULL, NULL);
   PROCESS_END();
 }
 
@@ -301,7 +351,7 @@ static void init(void) {
   PRINTF("init: Initializing CC-MAC\n");
   _Tbeacon = INITIAL_TBEACON;
   /* Call turn_radio_off to clear all flags and whatnot */
-  turn_radio_off(NULL);
+  turn_radio_off(NULL, NULL);
   on();
 }
 
@@ -359,6 +409,7 @@ static void send_list(mac_callback_t sent_callback, void *ptr, struct rdc_buf_li
   
   sending_burst = 1;
   process_start(&wait_to_send_process, buf_list);
+  radio_is_on = 1;
   NETSTACK_RADIO.on();
   
   return;
@@ -371,7 +422,8 @@ static void input(void) {
 
   PRINTF("input: Handed packet from radio.\n");
   /* Stay awake for now - listen for another possible packet */
-  ctimer_stop(&_offTimer);
+  //last_radio_off_caller = ROFF_CANCEL;
+  rtimer_unset();
 
   /* Check if the packetbuf is locked, but I think we need to go ahead anyway */
   if (packetbuf_locked) {
@@ -382,7 +434,9 @@ static void input(void) {
   if (NETSTACK_FRAMER.parse() < 0) {
     PRINTF("input: Framer failed to parse packet.\n");
     packetbuf_locked = 0;
-    ctimer_set(&_offTimer, INTER_PACKET_DEADLINE, turn_radio_off, NULL);
+    //radio_off_arg = ROFF_INPUT_PARSE_FAIL;
+    rtimer_set(&_offTimer, RTIMER_NOW() + INTER_PACKET_DEADLINE, 1, turn_radio_off, NULL);
+    //last_radio_off_caller = ROFF_INPUT_PARSE_FAIL;
     return;
   }
 
@@ -431,7 +485,11 @@ static void input(void) {
       else {
         PRINTF("input: Ack send failed.\n");
       }
-      ctimer_set(&_offTimer, INTER_PACKET_DEADLINE, turn_radio_off, NULL);
+      if (!packetbuf_attr(PACKETBUF_ATTR_PENDING)) {
+        //radio_off_arg = ROFF_INPUT_LAST_ACK_SENT;
+        rtimer_set(&_offTimer, RTIMER_NOW() + INTER_PACKET_DEADLINE, 1, turn_radio_off, NULL);
+        //last_radio_off_caller = ROFF_INPUT_LAST_ACK_SENT;
+      }
 
       packetbuf_copyfrom(_backupPacketbuf, _backupPacketbufLen);
       _backupPacketbufLen = 0;
@@ -451,7 +509,7 @@ static void input(void) {
       mac_call_sent_callback(_sent_callback, _ptr, MAC_TX_OK, 1);
 
       if (!sending_burst) {
-        turn_radio_off(NULL);
+        turn_radio_off(NULL, NULL);
       }
       process_post_synch(&wait_to_send_process, PROCESS_EVENT_CONTINUE, NULL);
       break;
@@ -481,7 +539,7 @@ static int on(void) {
 static int off(int keep_radio_on) {
   sink_is_beaconing = 0;
   if (!keep_radio_on) {
-    turn_radio_off(NULL);
+    turn_radio_off(NULL, NULL);
   }
   return 1;
 }

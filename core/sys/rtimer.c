@@ -89,6 +89,12 @@ rtimer_set(struct rtimer *rtimer, rtimer_clock_t time,
 }
 /*---------------------------------------------------------------------------*/
 void
+rtimer_unset(void)
+{
+  next_rtimer = NULL;
+}
+/*---------------------------------------------------------------------------*/
+void
 rtimer_run_next(void)
 {
   struct rtimer *t;

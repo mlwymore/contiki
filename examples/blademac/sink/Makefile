@@ -1,5 +1,5 @@
 CONTIKI = ../../..
-
+APPS += powertrace
 all: example-broadcast
 
 CONTIKI_WITH_RIME = 1

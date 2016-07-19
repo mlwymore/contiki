@@ -121,17 +121,17 @@ powertrace_print(char *str)
          all_cpu, all_lpm, all_transmit, all_listen, all_idle_transmit, all_idle_listen,
          cpu, lpm, transmit, listen, idle_transmit, idle_listen,
          (int)((100L * (all_transmit + all_listen)) / all_time),
-         (int)((10000L * (all_transmit + all_listen) / all_time) - (100L * (all_transmit + all_listen) / all_time) * 100),
+         (int)((10000L * (uint64_t)(all_transmit + all_listen) / all_time) - (100L * (all_transmit + all_listen) / all_time) * 100),
          (int)((100L * (transmit + listen)) / time),
-         (int)((10000L * (transmit + listen) / time) - (100L * (transmit + listen) / time) * 100),
+         (int)((10000L * (uint64_t)(transmit + listen) / time) - (100L * (transmit + listen) / time) * 100),
          (int)((100L * all_transmit) / all_time),
-         (int)((10000L * all_transmit) / all_time - (100L * all_transmit / all_time) * 100),
+         (int)((10000L * (uint64_t)all_transmit) / all_time - (100L * all_transmit / all_time) * 100),
          (int)((100L * transmit) / time),
-         (int)((10000L * transmit) / time - (100L * transmit / time) * 100),
+         (int)((10000L * (uint64_t)transmit) / time - (100L * transmit / time) * 100),
          (int)((100L * all_listen) / all_time),
-         (int)((10000L * all_listen) / all_time - (100L * all_listen / all_time) * 100),
+         (int)((10000L * (uint64_t)all_listen) / all_time - (100L * all_listen / all_time) * 100),
          (int)((100L * listen) / time),
-         (int)((10000L * listen) / time - (100L * listen / time) * 100));
+         (int)((10000L * (uint64_t)listen) / time - (100L * listen / time) * 100));
 
   for(s = list_head(stats_list); s != NULL; s = list_item_next(s)) {
 

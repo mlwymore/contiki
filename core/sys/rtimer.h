@@ -114,6 +114,15 @@ int rtimer_set(struct rtimer *task, rtimer_clock_t time,
 	       rtimer_clock_t duration, rtimer_callback_t func, void *ptr);
 
 /**
+ * \brief      Cancel the rtimer callback.
+ *
+ *             This function cancels ANY pending rtimer callback. The timer still expires, but nothing
+ *             happens. 
+ *
+ */
+void rtimer_unset(void);
+
+/**
  * \brief      Execute the next real-time task and schedule the next task, if any
  *
  *             This function is called by the architecture dependent
