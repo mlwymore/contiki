@@ -48,6 +48,9 @@
 
 #include <stdio.h>
 
+static int sentCounter = 0;
+static int attemptedCounter = 0;
+
 /*---------------------------------------------------------------------------*/
 PROCESS(example_broadcast_process, "Broadcast example");
 AUTOSTART_PROCESSES(&example_broadcast_process);
@@ -58,7 +61,18 @@ broadcast_recv(struct broadcast_conn *c, const linkaddr_t *from)
   printf("broadcast message received from %d.%d: '%s'\n",
          from->u8[0], from->u8[1], (char *)packetbuf_dataptr());
 }
-static const struct broadcast_callbacks broadcast_call = {broadcast_recv};
+
+static void
+broadcast_sent(struct broadcast_conn *bc, int status, int num_tx)
+{
+  printf("broadcast message sent\n");
+  sentCounter++;
+  if (sentCounter % 8 == 0) {
+    printf("Reliability stats: %d attempted, %d sent\n", attemptedCounter, sentCounter);
+  }
+}
+
+static const struct broadcast_callbacks broadcast_call = {broadcast_recv, broadcast_sent};
 static struct broadcast_conn broadcast;
 /*---------------------------------------------------------------------------*/
 PROCESS_THREAD(example_broadcast_process, ev, data)
@@ -69,8 +83,8 @@ PROCESS_THREAD(example_broadcast_process, ev, data)
 
   PROCESS_BEGIN();
 
-  /* Start powertracing, once every two seconds. */
-  powertrace_start(CLOCK_SECOND * 6);
+  /* Start powertracing, once every 10 seconds. */
+  powertrace_start(CLOCK_SECOND * 10);
 
 
   broadcast_open(&broadcast, 129, &broadcast_call);
@@ -84,7 +98,8 @@ PROCESS_THREAD(example_broadcast_process, ev, data)
 
     packetbuf_copyfrom("Hello", 6);
     broadcast_send(&broadcast);
-    printf("broadcast message sent\n");
+    attemptedCounter++;
+    printf("broadcast message queued\n");
 
   }
 

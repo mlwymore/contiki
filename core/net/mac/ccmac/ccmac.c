@@ -40,6 +40,15 @@
 #define LEDS 0
 #define COMPOWER_ON 0
 #define TRACE_ON 1
+#if TRACE_ON
+#include <stdio.h>
+#include "sys/clock.h"
+#define TRACE(format, ...) printf("TRACE " format, __VA_ARGS__)
+#else
+#define TRACE(...)
+#endif
+
+#define LOG_DELAY 1
 
 #include "contiki-conf.h"
 #include "net/mac/mac.h"
@@ -53,6 +62,7 @@
 #endif
 #include "sys/process.h"
 
+
 #define DEBUG 0
 #if DEBUG
 #include <stdio.h>
@@ -63,7 +73,7 @@
 #define PRINTDEBUG(...)
 #endif
 
-#define LIMITED_DEBUG 0
+#define LIMITED_DEBUG 1
 #if LIMITED_DEBUG
 #include <stdio.h>
 #define LIM_PRINTF(...) printf(__VA_ARGS__)
@@ -88,8 +98,10 @@
 #ifdef CCMAC_CONF_INTER_PACKET_DEADLINE
 #define INTER_PACKET_DEADLINE               CCMAC_CONF_INTER_PACKET_DEADLINE
 #else
-#if DEBUG
+#if DEBUG || LIMITED_DEBUG
 #define INTER_PACKET_DEADLINE               RTIMER_SECOND / 65
+//#elif LIMITED_DEBUG
+//#define INTER_PACKET_DEADLINE               RTIMER_SECOND / 100
 #else
 #define INTER_PACKET_DEADLINE               RTIMER_SECOND / 200
 #endif
@@ -147,6 +159,7 @@ static void turn_radio_off(struct rtimer * rt, void * ptr) {
   process_exit(&wait_to_send_process);
   packetbuf_locked = 0;
   NETSTACK_RADIO.off();
+  TRACE("%lu RADIO_OFF 0\n", (unsigned long)clock_time());
 #if COMPOWER_ON
   if (radio_is_on) {
     compower_accumulate(&compower_idle_activity);
@@ -170,7 +183,7 @@ static void turn_radio_off(struct rtimer * rt, void * ptr) {
       /* Since rtimer_clock_t is 16-bit, we can easily have rollover problems */
       /* This solution is kind of hacky. */
       if (temp_time > 65535) {
-        LIM_PRINTF("cc-mac: Beacon timer rollover\n");
+        //LIM_PRINTF("cc-mac: Beacon timer rollover\n");
         temp_time -= 65535;
         now = RTIMER_NOW();
         /* If rtimer is currently at a higher tick than the last time the beacon timer expired,
@@ -185,7 +198,7 @@ static void turn_radio_off(struct rtimer * rt, void * ptr) {
       beacon_intervals++;
       now = RTIMER_NOW();
     } while (temp_time < now);
-    LIM_PRINTF("cc-mac: Setting beacon timer for %u (now is %u)\n", (uint16_t)temp_time, now);
+    //LIM_PRINTF("cc-mac: Setting beacon timer for %u (now is %u)\n", (uint16_t)temp_time, now);
     rtimer_set(&_beaconTimer, (rtimer_clock_t)temp_time, 1, send_beacon, NULL);
   }
 }
@@ -262,6 +275,7 @@ static void send_beacon(struct rtimer * rt, void * ptr) {
   packetbuf_locked = 1;
   radio_is_on = 1;
   NETSTACK_RADIO.on();
+  TRACE("%lu RADIO_ON 0\n", (unsigned long)clock_time());
 
   packetbuf_clear();
   packetbuf_set_addr(PACKETBUF_ADDR_SENDER, &linkaddr_node_addr);
@@ -270,6 +284,7 @@ static void send_beacon(struct rtimer * rt, void * ptr) {
   memcpy(packetbuf_dataptr(), &beacon, sizeof(ccmac_beacon_payload_t));
 
   ret = send_packet();
+  TRACE("%lu BEACON 0\n", (unsigned long)clock_time());
   packetbuf_locked = 0;
 
   if (ret != MAC_TX_OK) {
@@ -341,6 +356,7 @@ PROCESS_THREAD(wait_to_send_process, ev, data) {
       queuebuf_to_packetbuf(curr->buf);
 
       ret = send_packet();
+      TRACE("%lu DATA 0 %u\n", (unsigned long)clock_time(), packetbuf_attr(PACKETBUF_ATTR_MAC_SEQNO));
       packetbuf_locked = 0;
 
       if (ret == MAC_TX_ERR_FATAL || ret == MAC_TX_ERR) {
@@ -391,6 +407,7 @@ static void send_list(mac_callback_t sent_callback, void *ptr, struct rdc_buf_li
   struct rdc_buf_list *curr;
   struct rdc_buf_list *next;
   PRINTF("send_list: Packets to send.\n");
+  TRACE("%lu DATA_ARRIVAL 0\n", (unsigned long)clock_time());
 
   if (packetbuf_locked) {
     PRINTF("send_list: Packetbuf locked, can't secure packets.\n");
@@ -430,6 +447,7 @@ static void send_list(mac_callback_t sent_callback, void *ptr, struct rdc_buf_li
   process_start(&wait_to_send_process, buf_list);
   radio_is_on = 1;
   NETSTACK_RADIO.on();
+  TRACE("%lu RADIO_ON 0\n", (unsigned long)clock_time());
   
   return;
 }
@@ -439,7 +457,7 @@ static void input(void) {
   uint16_t dataSeqno;
   uint16_t *ackSeqno;
 
-  PRINTF("input: Handed packet from radio.\n");
+  LIM_PRINTF("input: Handed packet from radio w/ RSSI %d.\n", packetbuf_attr(PACKETBUF_ATTR_RSSI));
   /* Stay awake for now - listen for another possible packet */
   rtimer_unset();
 
@@ -459,6 +477,7 @@ static void input(void) {
   switch (packetbuf_attr(PACKETBUF_ATTR_PACKET_TYPE)) {
     case PACKETBUF_ATTR_PACKET_TYPE_BEACON:
       PRINTF("input: It's a beacon!\n");
+      TRACE("%lu BEACON_RECEIVED 0\n", (unsigned long)clock_time());
       packetbuf_locked = 0;
       if (process_is_running(&wait_to_send_process)) {
         sink_is_awake = 1;
@@ -468,6 +487,7 @@ static void input(void) {
     case PACKETBUF_ATTR_PACKET_TYPE_DATA:
       dataSeqno = packetbuf_attr(PACKETBUF_ATTR_MAC_SEQNO);
       PRINTF("input: It's data! seqno %d\n", dataSeqno);
+      TRACE("%lu DATA_RECEIVED 0 %u\n", (unsigned long)clock_time(), dataSeqno);
 
       receiving_burst = 1;
 
@@ -491,6 +511,7 @@ static void input(void) {
       //memcpy(packetbuf_dataptr(), &beacon, sizeof(ccmac_beacon_payload_t));
 
       ret = send_packet();
+      TRACE("%lu ACK 0 %u\n", (unsigned long)clock_time(), dataSeqno);
 
       if (ret == MAC_TX_OK) {
         PRINTF("input: Ack sent.\n");
@@ -514,6 +535,7 @@ static void input(void) {
       break;
     case PACKETBUF_ATTR_PACKET_TYPE_ACK:
       PRINTF("input: It's an ack! _ptr is %d\n", (int)_ptr);
+      TRACE("%lu ACK_RECEIVED 0 %u\n", (unsigned long)clock_time(), packetbuf_attr(PACKETBUF_ATTR_MAC_SEQNO));
       /* Use the seqno to ID the packet instead of loading it back into packetbuf */
       ackSeqno = (uint16_t *)_ptr;
       *ackSeqno = packetbuf_attr(PACKETBUF_ATTR_MAC_SEQNO);
