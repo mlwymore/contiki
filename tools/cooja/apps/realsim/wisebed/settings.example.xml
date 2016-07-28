@@ -1,0 +1,31 @@
+<expconf>
+	
+	<!-- How long to reserve the Network in min  - You may use an expression -->
+	<time>60 * 24</time> <!-- Run 24 h -->
+	
+	<!-- Set firmware. If none is set the firmware packed in the jar will be used. -->
+	<!-- 
+	<firmware>../sky/statprinter.ihex</firmware> 
+	-->
+	
+	<!-- If no motes are listed all available motes are used. -->
+	<!--
+	<mote>urn:fau:0x0001</mote>
+	<mote>urn:fau:0x0002</mote>
+	-->
+	<!-- files are passed to SimpleDateFormat
+		Multiple output are allowed -->
+
+	<!-- Output log -->
+	<!--	
+	<output>yyyy-MM-dd-HH:mm:ss'.log'</output>  
+	-->
+	
+	<!-- Connect to RealSim Server -->
+	<!--
+	<rsClient>
+		<host>localhost</host>
+		<port>1337</port>
+	</rsClient>
+	-->
+</expconf>

@@ -48,7 +48,7 @@
 #define QUEUEBUF_NUM 10
 #endif
 #ifndef QUEUEBUF_THRESHOLD
-#define QUEUEBUF_THRESHOLD QUEUEBUF_NUM / 2
+#define QUEUEBUF_THRESHOLD 1
 #endif
 #define MAX_QUEUED_PACKETS QUEUEBUF_NUM
 #define MAX_MAC_TRANSMISSIONS 3
@@ -67,6 +67,7 @@
 //static uint16_t const *callback_seqno;
 static volatile uint16_t callback_seqno;
 static volatile uint16_t last_sent_seqno;
+static volatile uint8_t is_on = 0;
 static int off(int keep_radio_on);
 
 struct qbuf_metadata {
@@ -111,6 +112,7 @@ static void packet_sent(void *ptr, int status, int num_transmissions) {
     if (*ackSeqno == last_sent_seqno) {
       try_again = 1;
     }
+  case MAC_TX_COLLISION:
   case MAC_TX_ERR_FATAL:
 
     for (packet = list_head(packet_list); packet != NULL; packet = list_item_next(packet)) {
@@ -136,7 +138,6 @@ static void packet_sent(void *ptr, int status, int num_transmissions) {
     packet_done(packet, status);
     break;
   case MAC_TX_NOACK:
-  case MAC_TX_COLLISION:
   case MAC_TX_DEFERRED:
     try_again = 1;
     break;
@@ -224,6 +225,18 @@ static void input(void) {
 }
 
 static int on(void) {
+  /*  What? Who calls NETSTACK_MAC.on()? */
+  is_on = 1;
+  PRINTF("packetqueue: is_on %d\n", is_on);
+  if (is_on && list_length(packet_list) != 0) {
+    last_sent_seqno = queuebuf_attr(((struct rdc_buf_list *)list_tail(packet_list))->buf, PACKETBUF_ATTR_MAC_SEQNO);
+    NETSTACK_RDC.send_list(packet_sent, (void *)&callback_seqno, list_head(packet_list));
+    return 0;
+  }
+  else if (is_on) {
+    return 0;
+  }
+  is_on = 1;
   return NETSTACK_RDC.on();
 }
 
@@ -236,6 +249,7 @@ static int off(int keep_radio_on) {
     memb_free(&packet_memb, curr);
     curr = next;
   }*/
+  is_on = 0;
   return NETSTACK_RDC.off(keep_radio_on);
 }
 

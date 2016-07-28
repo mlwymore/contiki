@@ -1,0 +1,43 @@
+<?xml version="1.0"?>
+
+<project name="COOJA: RealSim" default="jar" basedir=".">
+	<property name="cooja" location="../../../../cooja"/>
+	<property name="javadoc" location="javadoc"/>
+
+	<property name="cooja_jar" value="${cooja}/dist/cooja.jar"/>
+	<property name="log4j_jar" value="${cooja}/lib/log4j.jar"/>
+	<property name="args" value=""/>
+
+	<target name="init">
+		<tstamp/>
+		<mkdir dir="build"/>
+		<mkdir dir="lib"/>
+	</target>
+
+	<target name="compile" depends="init">
+		<mkdir dir="build"/>
+		<javac srcdir="src" destdir="build" debug="on"
+  			includeantruntime="false">
+			<classpath>
+				<pathelement location="${cooja_jar}"/>
+				<pathelement location="${log4j_jar}"/>
+			</classpath>
+		</javac>
+	</target>
+
+	<target name="clean" depends="init">
+		<delete dir="build"/>
+		<delete dir="lib"/>
+	</target>
+
+	<target name="jar" depends="init, compile">
+		<mkdir dir="lib"/>
+		<jar destfile="lib/realsim.jar" basedir="build" />
+	</target>
+
+
+	<target name="jar_cooja">
+		<ant antfile="build.xml" dir="${cooja}" target="jar_cooja" inheritAll="false"/>
+	</target>
+
+</project>

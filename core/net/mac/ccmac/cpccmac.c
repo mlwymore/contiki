@@ -32,17 +32,18 @@
 
 /**
  * \file
- *         CC-MAC implementation
+ *         CPCC-MAC implementation
  * \author
  *         Mat Wymore <mlwymore@iastate.edu>
  */
 
+#include "sys/clock.h"
+
 #define LEDS 0
 #define COMPOWER_ON 0
-#define TRACE_ON 1
+#define TRACE_ON 0
 #if TRACE_ON
 #include <stdio.h>
-#include "sys/clock.h"
 #define TRACE(format, ...) printf("TRACE " format, __VA_ARGS__)
 #else
 #define TRACE(...)
@@ -51,10 +52,12 @@
 #define LOG_DELAY 1
 #if LOG_DELAY
 #define MAX_QUEUED_PACKETS 16
+#include <stdio.h>
 uint16_t delay_seqnos[MAX_QUEUED_PACKETS];
 clock_time_t delay_timestamp;
 #define PRINT_DELAY(format, ...) printf("DELAY " format, __VA_ARGS__)
 #endif
+
 
 #include "contiki-conf.h"
 #include "net/mac/mac.h"
@@ -62,7 +65,7 @@ clock_time_t delay_timestamp;
 #include "sys/rtimer.h"
 //#include "dev/radio.h"
 #include "net/netstack.h"
-#include "net/mac/ccmac/ccmac.h"
+#include "net/mac/ccmac/cpccmac.h"
 #if LEDS
 #include "dev/leds.h"
 #endif
@@ -104,16 +107,22 @@ clock_time_t delay_timestamp;
 #ifdef CCMAC_CONF_INTER_PACKET_DEADLINE
 #define INTER_PACKET_DEADLINE               CCMAC_CONF_INTER_PACKET_DEADLINE
 #else
-#if DEBUG || LIMITED_DEBUG
+#if DEBUG
 #define INTER_PACKET_DEADLINE               RTIMER_SECOND / 65
+//#define RTIMER_WAKEUP_BUFFER_TIME RTIMER_SECOND / 200
 //#elif LIMITED_DEBUG
 //#define INTER_PACKET_DEADLINE               RTIMER_SECOND / 100
-#elif TRACE_ON
+#elif TRACE_ON || LIMITED_DEBUG
 #define INTER_PACKET_DEADLINE               RTIMER_SECOND / 125
+//#define RTIMER_WAKEUP_BUFFER_TIME RTIMER_SECOND / 333
 #else
 #define INTER_PACKET_DEADLINE               RTIMER_SECOND / 200
+//#define RTIMER_WAKEUP_BUFFER_TIME RTIMER_SECOND / 333
 #endif
 #endif
+
+#define RTIMER_WAKEUP_BUFFER_TIME RTIMER_SECOND / 333
+#define CTIMER_WAKEUP_BUFFER_TIME CLOCK_SECOND / 128
 
 #if COMPOWER_ON
 static struct compower_activity current_packet_compower;
@@ -135,6 +144,16 @@ static volatile uint8_t packetbuf_locked = 0;
 static volatile uint8_t sending_burst = 0;
 static volatile uint8_t receiving_burst = 0;
 
+/* cpccmac specific */
+static rtimer_clock_t last_known_beacon = 0;
+static clock_time_t period_estimate = 0;
+static clock_time_t last_known_rendezvous = 0;
+static uint16_t beacon_intervals_napped = 0;
+static volatile uint8_t estimating_period = 0;
+static volatile uint8_t beacon_gap_seen = 0;
+static struct ctimer _wakeupTimer;
+/* ---------------- */
+
 static uint8_t tx_counter = 0;
 
 /* Used to allow process to call MAC callback */
@@ -147,11 +166,87 @@ static uint8_t _backupPacketbufLen;
 PROCESS(wait_to_send_process, "Process that waits for a go-ahead signal");
 static int off(int keep_radio_on);
 static void send_beacon(struct rtimer * rt, void * ptr);
+static void wake_up(struct rtimer * rt, void * ptr);
+
+static void nap(void) {
+  uint32_t temp_time;
+  rtimer_clock_t now;
+  uint16_t beacon_intervals;
+
+  //packetbuf_locked = 0;
+  NETSTACK_RADIO.off();
+  TRACE("%lu RADIO_OFF 0\n", (unsigned long)clock_time());
+  radio_is_on = 0;
+
+  rtimer_unset();
+  /* Possible we have to go multiple beacon intervals forward from the last beacon timer expiration*/
+
+  beacon_intervals = beacon_intervals_napped;
+  temp_time = 0;
+  do {
+    temp_time = (uint32_t)last_known_beacon + _Tbeacon * beacon_intervals - RTIMER_WAKEUP_BUFFER_TIME;
+    /* Since rtimer_clock_t is 16-bit for Sky, we can easily have rollover problems */
+    /* This solution is kind of hacky, especially if the clock isn't 16-bit... */
+    if (temp_time > 65535) {
+      LIM_PRINTF("cpcc-mac: Nap timer rollover\n");
+      temp_time %= 65535;
+      now = RTIMER_NOW();
+      /* If rtimer is currently at a higher tick than the last time the beacon timer expired,
+           then almost certainly that means the next beacon time is after the rollover, but
+           the rollover hasn't happened yet. Otherwise, the rollover has already happened and we
+           need to keep adding beacon intervals if temp_time is less than now.
+           There may be some really weird edge case where all this isn't true - not sure. */
+      if (now > last_known_beacon) {
+        break;
+      }
+    }
+    beacon_intervals++;
+    now = RTIMER_NOW();
+  } while (temp_time < now);
+  LIM_PRINTF("cpcc-mac: Setting nap timer for %u (now is %u) %d %u\n", (uint16_t)temp_time, now, beacon_intervals_napped, RTIMER_TIME(&_beaconTimer));
+  rtimer_set(&_beaconTimer, (rtimer_clock_t)temp_time, 1, wake_up, NULL);
+}
+
+static void beacon_timed_out(struct rtimer * rt, void * ptr) {
+  if (estimating_period) {
+    PRINTF("beacon_timed_out: beacon gap detected\n");
+    beacon_gap_seen = 1;
+    nap();
+  }
+  /* If a beacon timed out after a predicted wakeup, redo the period estimate */
+  else {
+    PRINTF("beacon_timed_out: period estimation redo required\n");
+    period_estimate = 0;
+  }
+}
+
+static void wake_up(struct rtimer * rt, void * ptr) {
+  radio_is_on = 1;
+  NETSTACK_RADIO.on();
+
+  if (estimating_period) {
+    beacon_intervals_napped++;
+  }
+
+  rtimer_unset();
+  rtimer_set(&_offTimer, RTIMER_NOW() + INTER_PACKET_DEADLINE, 1, beacon_timed_out, NULL);
+ 
+  if (ptr != NULL) {
+    process_start(&wait_to_send_process, ptr);
+  }
+
+  TRACE("%lu RADIO_ON 0\n", (unsigned long)clock_time());
+  return;
+}
+
+static void wake_up_wrapper(void * ptr) {
+  wake_up(NULL, ptr);
+}
 
 static void turn_radio_off(struct rtimer * rt, void * ptr) {
   rtimer_clock_t now;
   uint8_t beacon_intervals;
-  int32_t temp_time;
+  uint32_t temp_time;
 
   PRINTF("turn_radio_off: Turning off.\n");
   process_exit(&wait_to_send_process);
@@ -181,7 +276,7 @@ static void turn_radio_off(struct rtimer * rt, void * ptr) {
       /* Since rtimer_clock_t is 16-bit for Sky, we can easily have rollover problems */
       /* This solution is kind of hacky, especially if the clock isn't 16-bit... */
       if (temp_time > 65535) {
-        //LIM_PRINTF("cc-mac: Beacon timer rollover\n");
+        LIM_PRINTF("cc-mac: Beacon timer rollover\n");
         temp_time -= 65535;
         now = RTIMER_NOW();
         /* If rtimer is currently at a higher tick than the last time the beacon timer expired,
@@ -196,7 +291,7 @@ static void turn_radio_off(struct rtimer * rt, void * ptr) {
       beacon_intervals++;
       now = RTIMER_NOW();
     } while (temp_time < now);
-    //LIM_PRINTF("cc-mac: Setting beacon timer for %u (now is %u)\n", (uint16_t)temp_time, now);
+    LIM_PRINTF("cc-mac: Setting beacon timer for %u (now is %u) %d %u\n", (uint16_t)temp_time, now, beacon_intervals, RTIMER_TIME(&_beaconTimer));
     rtimer_set(&_beaconTimer, (rtimer_clock_t)temp_time, 1, send_beacon, NULL);
   }
 }
@@ -405,6 +500,8 @@ static void send_list(mac_callback_t sent_callback, void *ptr, struct rdc_buf_li
   struct rdc_buf_list *curr;
   struct rdc_buf_list *next;
 
+  clock_time_t next_wakeup;
+
   PRINTF("send_list: Packets to send.\n");
   TRACE("%lu DATA_ARRIVAL 0\n", (unsigned long)clock_time());
 
@@ -460,11 +557,20 @@ static void send_list(mac_callback_t sent_callback, void *ptr, struct rdc_buf_li
   _sent_callback = sent_callback;
   _ptr = ptr;
   
-
-  process_start(&wait_to_send_process, buf_list);
-  radio_is_on = 1;
-  NETSTACK_RADIO.on();
-  TRACE("%lu RADIO_ON 0\n", (unsigned long)clock_time());
+  if (!estimating_period && (period_estimate == 0 || last_known_rendezvous == 0)) {
+    wake_up(NULL, (void *)buf_list);
+  }
+  /* If we're estimating the period, we want to follow that wakeup schedule */
+  else if (!estimating_period) {
+    next_wakeup = last_known_rendezvous + period_estimate - CTIMER_WAKEUP_BUFFER_TIME;
+    while (next_wakeup < clock_time()) {
+      next_wakeup += period_estimate;
+    }
+    ctimer_set(&_wakeupTimer, next_wakeup - clock_time(), wake_up_wrapper, buf_list);
+  }
+  else {
+    process_start(&wait_to_send_process, buf_list);
+  }
   
   return;
 }
@@ -474,14 +580,17 @@ static void input(void) {
   uint16_t dataSeqno;
   uint16_t *ackSeqno;
   uint16_t pending;
+  rtimer_clock_t rtimer_now;
 #if LOG_DELAY
   int i = 0;
 #endif
 
   clock_time_t now;
+
+  rtimer_now = RTIMER_NOW();
   now = clock_time();
 
-  LIM_PRINTF("input: Handed packet from radio w/ RSSI %d.\n", packetbuf_attr(PACKETBUF_ATTR_RSSI));
+  //LIM_PRINTF("input: Handed packet from radio w/ RSSI %d.\n", packetbuf_attr(PACKETBUF_ATTR_RSSI));
   /* Stay awake for now - listen for another possible packet */
   rtimer_unset();
 
@@ -500,13 +609,28 @@ static void input(void) {
 
   switch (packetbuf_attr(PACKETBUF_ATTR_PACKET_TYPE)) {
     case PACKETBUF_ATTR_PACKET_TYPE_BEACON:
+      last_known_beacon = rtimer_now;
       PRINTF("input: It's a beacon!\n");
       TRACE("%lu BEACON_RECEIVED %d\n", (unsigned long)now, packetbuf_attr(PACKETBUF_ATTR_RSSI));
       packetbuf_locked = 0;
+      if (estimating_period && beacon_gap_seen) {
+        period_estimate = now - last_known_rendezvous;
+        PRINTF("input: estimated period of %d\n", (int)period_estimate);
+        estimating_period = 0;
+        beacon_gap_seen = 0;
+        last_known_rendezvous = now;
+      }
       if (process_is_running(&wait_to_send_process)) {
         sending_burst = 1;
         sink_is_awake = 1;
+        if (!estimating_period) {
+          last_known_rendezvous = now;
+        }
         process_post_synch(&wait_to_send_process, PROCESS_EVENT_CONTINUE, NULL);
+      }
+      else if (estimating_period) {
+        PRINTF("input: Napping\n");
+        nap();
       }
       break;
     case PACKETBUF_ATTR_PACKET_TYPE_DATA:
@@ -572,7 +696,19 @@ static void input(void) {
       mac_call_sent_callback(_sent_callback, _ptr, MAC_TX_OK, 1);
 
       if (!packetbuf_attr(PACKETBUF_ATTR_PENDING)) {
-        turn_radio_off(NULL, NULL);
+        process_exit(&wait_to_send_process);
+        sending_burst = 0;
+        if (period_estimate == 0) {
+          estimating_period = 1;
+          beacon_intervals_napped = 0;
+          nap();
+        }
+        else if (estimating_period) {
+          nap();
+        }
+        else {
+          turn_radio_off(NULL, NULL);
+        }
       }
       else {
         process_post_synch(&wait_to_send_process, PROCESS_EVENT_CONTINUE, NULL);
@@ -621,8 +757,8 @@ static unsigned short channel_check_interval(void) {
   return _Tbeacon;
 }
 
-const struct rdc_driver ccmac_driver = {
-  "ccmac",
+const struct rdc_driver cpccmac_driver = {
+  "cpccmac",
   init,
   send,
   send_list,

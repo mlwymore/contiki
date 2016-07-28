@@ -1,0 +1,7 @@
+<conf>
+	<smEndpointURL>http://myserver:10011/sessions</smEndpointURL> 
+	<prefix>urn:foo</prefix>
+	<login>mylogin</login>
+	<pass>mypass</pass>
+
+</conf>
