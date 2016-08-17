@@ -65,7 +65,7 @@
 #endif
 
 //static uint16_t const *callback_seqno;
-static volatile uint16_t callback_seqno;
+//static volatile uint16_t callback_seqno;
 static volatile uint16_t last_sent_seqno;
 static volatile uint8_t is_on = 0;
 static int off(int keep_radio_on);
@@ -93,7 +93,7 @@ static void packet_done(struct rdc_buf_list *packet, int status) {
   queuebuf_free(packet->buf);
   memb_free(&metadata_memb, metadata);
   memb_free(&packet_memb, packet);
-  PRINTF("ccmac-packetqueue: packet removed from queue and freed\n");
+  //PRINTF("ccmac-packetqueue: packet removed from queue and freed\n");
   //TODO: correctly track number of transmissions
   mac_call_sent_callback(sent_callback, cptr, status, 1);
   return;
@@ -101,29 +101,29 @@ static void packet_done(struct rdc_buf_list *packet, int status) {
 
 static void packet_sent(void *ptr, int status, int num_transmissions) {
   struct rdc_buf_list *packet;
-  uint16_t *ackSeqno;
-  ackSeqno = (uint16_t *)ptr;
+  uint16_t ackSeqno;
   int try_again = 0;
+
+  ackSeqno = packetbuf_attr(PACKETBUF_ATTR_MAC_SEQNO);
   
   //PRINTF("ccmac-packetqueue: callback entered, ptr is %d, seqno is %d\n", (int)ptr, *ackSeqno);
 
   switch(status) {
   case MAC_TX_OK:
-    if (*ackSeqno == last_sent_seqno) {
+    if (ackSeqno == last_sent_seqno) {
       try_again = 1;
     }
-  case MAC_TX_COLLISION:
   case MAC_TX_ERR_FATAL:
 
     for (packet = list_head(packet_list); packet != NULL; packet = list_item_next(packet)) {
-      if (queuebuf_attr(packet->buf, PACKETBUF_ATTR_MAC_SEQNO) == *ackSeqno) {
+      if (queuebuf_attr(packet->buf, PACKETBUF_ATTR_MAC_SEQNO) == ackSeqno) {
         break;
       }
     }
 
     if (packet == NULL) {
       PRINTF("ccmac-packetqueue: seqno %d not found\n", 
-                   packetbuf_attr(PACKETBUF_ATTR_MAC_SEQNO));
+                   ackSeqno);
       return;
     }
     else if (packet->ptr == NULL) {
@@ -132,14 +132,16 @@ static void packet_sent(void *ptr, int status, int num_transmissions) {
     }
 
     /* Load packet into packetbuf for the callback */
-    PRINTF("ccmac-packetqueue: loading packet into packetbuf for callback\n");
-    queuebuf_to_packetbuf(packet->buf);
+    //PRINTF("ccmac-packetqueue: loading packet into packetbuf for callback\n");
+    //queuebuf_to_packetbuf(packet->buf);
 
     packet_done(packet, status);
     break;
-  case MAC_TX_NOACK:
+  case MAC_TX_COLLISION:
   case MAC_TX_DEFERRED:
-    try_again = 1;
+    break;
+  case MAC_TX_NOACK:
+    //try_again = 1;
     break;
   default:
     break;
@@ -147,7 +149,7 @@ static void packet_sent(void *ptr, int status, int num_transmissions) {
   if (try_again && list_length(packet_list) >= QUEUEBUF_THRESHOLD) {
     last_sent_seqno = queuebuf_attr(((struct rdc_buf_list *)list_tail(packet_list))->buf, PACKETBUF_ATTR_MAC_SEQNO);
     PRINTF("ccmac-packetqueue: trying again with %d packets, threshold %d\n", list_length(packet_list), QUEUEBUF_THRESHOLD);
-    NETSTACK_RDC.send_list(packet_sent, (void *)&callback_seqno, list_head(packet_list));
+    NETSTACK_RDC.send_list(packet_sent, NULL, list_head(packet_list));
   }
 }
 
@@ -161,7 +163,7 @@ static void init(void) {
 }
 
 static void send(mac_callback_t sent_callback, void *ptr) {
-  static uint16_t seqno;
+  static uint8_t seqno;
   static uint8_t initialized = 0;
   static uint16_t max_txs = 0;
 
@@ -174,7 +176,7 @@ static void send(mac_callback_t sent_callback, void *ptr) {
   if (seqno == 0) {
     seqno++;
   }
-  PRINTF("ccmac-packetqueue: queueing seqno %u, ptr is %d\n", seqno, (int)&callback_seqno);
+  PRINTF("ccmac-packetqueue: queueing seqno %u\n", seqno);
   packetbuf_set_attr(PACKETBUF_ATTR_MAC_SEQNO, seqno++);
 
   struct rdc_buf_list *packet;
@@ -201,7 +203,7 @@ static void send(mac_callback_t sent_callback, void *ptr) {
           if (list_length(packet_list) >= QUEUEBUF_THRESHOLD) {
             last_sent_seqno = seqno;
             PRINTF("ccmac-packetqueue: sending %d packets, threshold %d\n", list_length(packet_list), QUEUEBUF_THRESHOLD);
-            NETSTACK_RDC.send_list(packet_sent, (void *)&callback_seqno, list_head(packet_list));
+            NETSTACK_RDC.send_list(packet_sent, NULL, list_head(packet_list));
           }
           return;
         }
@@ -230,7 +232,7 @@ static int on(void) {
   PRINTF("packetqueue: is_on %d\n", is_on);
   if (is_on && list_length(packet_list) != 0) {
     last_sent_seqno = queuebuf_attr(((struct rdc_buf_list *)list_tail(packet_list))->buf, PACKETBUF_ATTR_MAC_SEQNO);
-    NETSTACK_RDC.send_list(packet_sent, (void *)&callback_seqno, list_head(packet_list));
+    NETSTACK_RDC.send_list(packet_sent, NULL, list_head(packet_list));
     return 0;
   }
   else if (is_on) {

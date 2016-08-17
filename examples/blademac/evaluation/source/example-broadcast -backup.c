@@ -49,9 +49,6 @@
 
 #include <stdio.h>
 
-#define DATA_ARRIVAL_INTERVAL 1
-#define NUM_PACKETS_TO_SEND 100
-
 static int sentCounter = 0;
 static int attemptedCounter = 0;
 
@@ -83,47 +80,38 @@ static struct broadcast_conn broadcast;
 PROCESS_THREAD(example_broadcast_process, ev, data)
 {
   static struct etimer et;
-  static clock_time_t start_time;
-  static uint32_t interval;
-  //static int i = 0;
+  static int i = 0;
 
   PROCESS_EXITHANDLER(broadcast_close(&broadcast);)
 
   PROCESS_BEGIN();
 
-  start_time = clock_time();
-
   /* Start powertracing, once every 1 seconds. */
   //powertrace_start(CLOCK_SECOND * 1);
 
-  printf("data arrival interval: %d, start time: %lu\n", DATA_ARRIVAL_INTERVAL, (unsigned long)start_time);
 
   broadcast_open(&broadcast, 129, &broadcast_call);
 
   while(1) {
 
     /* Delay a few seconds */
-    interval = CLOCK_SECOND * DATA_ARRIVAL_INTERVAL + random_rand() % (CLOCK_SECOND * 1);
-    etimer_set(&et, interval);
-    //printf("data arrival timer set for %lu\n", interval); 
+    etimer_set(&et, CLOCK_SECOND * 1 + random_rand() % (CLOCK_SECOND * 1));
+
     PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&et));
 
-    //if (clock_time() - start_time < CLOCK_SECOND * 3600) {
-    if (attemptedCounter < NUM_PACKETS_TO_SEND) {
+    if (clock_time() < 128 * 60) {
       packetbuf_copyfrom("Hello", 6);
-      //for (i = 0; i < 1; i++) {
+      for (i = 0; i < 1; i++) {
         broadcast_send(&broadcast);
         attemptedCounter++;
         //printf("message queued\n");
-      //}
+      }
     }
-    else if (sentCounter == attemptedCounter || clock_time() > CLOCK_SECOND * DATA_ARRIVAL_INTERVAL * NUM_PACKETS_TO_SEND * 2) {
-      //printf("done with program\n");
+    else if (sentCounter == attemptedCounter || clock_time() > 128 * 70) {
       break;
     }
     else {
       //cheating to flush the packetqueue
-      //printf("flushing packet queue\n");
       NETSTACK_MAC.on();
     }
   }

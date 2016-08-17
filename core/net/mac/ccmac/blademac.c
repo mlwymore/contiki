@@ -37,11 +37,17 @@
  *         Mat Wymore <mlwymore@iastate.edu>
  */
 
+#define LOG_DELAY 0
+#define LOG_WINDOW 1
+#define DEBUG 0
+#define LIMITED_DEBUG 0
+#define TRACE_ON 0
+
 #include "sys/clock.h"
 
 #define LEDS 0
 #define COMPOWER_ON 0
-#define TRACE_ON 0
+
 #if TRACE_ON
 #include <stdio.h>
 #define TRACE(format, ...) printf("TRACE " format, __VA_ARGS__)
@@ -49,15 +55,21 @@
 #define TRACE(...)
 #endif
 
-#define LOG_DELAY 1
+
 #if LOG_DELAY
 #define MAX_QUEUED_PACKETS 16
 #include <stdio.h>
-uint16_t delay_seqnos[MAX_QUEUED_PACKETS];
+uint8_t delay_seqnos[MAX_QUEUED_PACKETS];
 clock_time_t delay_timestamp;
 #define PRINT_DELAY(format, ...) printf("DELAY " format, __VA_ARGS__)
 #endif
 
+#if LOG_WINDOW
+#include <stdio.h>
+#define WINDOW(format, ...) printf("WINDOW " format, __VA_ARGS__)
+#else
+#define WINDOW(...)
+#endif
 
 #include "contiki-conf.h"
 #include "net/mac/mac.h"
@@ -72,7 +84,7 @@ clock_time_t delay_timestamp;
 #include "sys/process.h"
 
 
-#define DEBUG 0
+
 #if DEBUG
 #include <stdio.h>
 #define PRINTF(...) printf(__VA_ARGS__)
@@ -82,7 +94,7 @@ clock_time_t delay_timestamp;
 #define PRINTDEBUG(...)
 #endif
 
-#define LIMITED_DEBUG 0
+
 #if LIMITED_DEBUG
 #include <stdio.h>
 #define LIM_PRINTF(...) printf(__VA_ARGS__)
@@ -99,7 +111,7 @@ clock_time_t delay_timestamp;
 #ifdef CCMAC_CONF_INITIAL_TBEACON
 #define INITIAL_TBEACON CCMAC_CONF_INITIAL_TBEACON
 #else
-#define INITIAL_TBEACON RTIMER_SECOND/10
+#define INITIAL_TBEACON RTIMER_SECOND/4
 #endif
 
 /* INTER_PACKET_DEADLINE is the maximum time a receiver waits for the
@@ -112,8 +124,8 @@ clock_time_t delay_timestamp;
 //#define RTIMER_WAKEUP_BUFFER_TIME RTIMER_SECOND / 200
 //#elif LIMITED_DEBUG
 //#define INTER_PACKET_DEADLINE               RTIMER_SECOND / 100
-#elif TRACE_ON || LIMITED_DEBUG
-#define INTER_PACKET_DEADLINE               RTIMER_SECOND / 125
+#elif defined(TRACE_ON) || defined(LIMITED_DEBUG)
+#define INTER_PACKET_DEADLINE               RTIMER_SECOND / 100
 //#define RTIMER_WAKEUP_BUFFER_TIME RTIMER_SECOND / 333
 #else
 #define INTER_PACKET_DEADLINE               RTIMER_SECOND / 200
@@ -122,7 +134,9 @@ clock_time_t delay_timestamp;
 #endif
 
 #define RTIMER_WAKEUP_BUFFER_TIME RTIMER_SECOND / 250
-#define CTIMER_WAKEUP_BUFFER_TIME CLOCK_SECOND / 128
+//#define CTIMER_WAKEUP_BUFFER_TIME CLOCK_SECOND / 128
+
+#define RTIMER_MAX_TICKS 65536
 
 #if COMPOWER_ON
 static struct compower_activity current_packet_compower;
@@ -151,13 +165,14 @@ static clock_time_t last_known_rendezvous = 0;
 //static uint16_t beacon_intervals_napped = 0;
 static volatile uint8_t estimating_period = 0;
 static volatile uint8_t beacon_gap_seen = 0;
-static struct ctimer _wakeupTimer;
+static struct rtimer _wakeupTimer;
 /* ---------------- */
 
 /* blademac specific */
-static clock_time_t _Tsleep;
+static rtimer_clock_t _Tsleep;
 static packetbuf_attr_t prev_beacon_rss = 0;
 static volatile uint8_t prev_beacon_seen = 0;
+static volatile uint8_t beacon_phase_known = 0;
 enum {
   BLADEMAC_STATE_HIBERNATION,
   BLADEMAC_STATE_WAIT,
@@ -187,6 +202,9 @@ LIST(beacon_rss_sample_list);
 LIST(ack_rss_sample_list);
 LIST(window_estimate_list);
 
+static struct rdc_buf_list *curr_packet;
+static struct rdc_buf_list *next_packet;
+
 /* ----------------- */
 
 static uint8_t tx_counter = 0;
@@ -202,8 +220,9 @@ PROCESS(wait_to_send_process, "Process that waits for a go-ahead signal");
 static int off(int keep_radio_on);
 static void send_beacon(struct rtimer * rt, void * ptr);
 static void wake_up(struct rtimer * rt, void * ptr);
-static void wake_up_wrapper(void * ptr);
-static void turn_radio_off(struct rtimer * rt, void * ptr);
+//static void wake_up_wrapper(void * ptr);
+static void hibernate(struct rtimer * rt, void * ptr);
+static void clean_radio(void);
 
 static void clear_rss_samples() {
   struct rss_sample *sample;
@@ -220,6 +239,7 @@ static void clear_rss_samples() {
     list_remove(beacon_rss_sample_list, sample);
     sample = list_head(beacon_rss_sample_list);
   }
+  LIM_PRINTF("clear_rss_samples: cleared samples, list lengths %d %d\n", list_length(ack_rss_sample_list), list_length(beacon_rss_sample_list));
 }
 
 static void estimate_window() {
@@ -233,9 +253,13 @@ static void estimate_window() {
   clock_time_t t_peak;
   clock_time_t t_next;
   clock_time_t t_last;
+  uint64_t moving_avg;
 
   /* Covers "single packet" case */
-  if (list_length(ack_rss_sample_list) + list_length(beacon_rss_sample_list) <= 1) {
+  if (list_length(ack_rss_sample_list) == 0) {
+    using_data_group_peak = 0;
+  }
+  if (using_data_group_peak + list_length(beacon_rss_sample_list) <= 1) {
     return;
   }
   
@@ -256,7 +280,7 @@ static void estimate_window() {
 
   next_sample = NULL;
   sample = list_head(beacon_rss_sample_list);
-  if (list_length(ack_rss_sample_list) != 0) {
+  if (using_data_group_peak) {
     data_group_rss /= list_length(ack_rss_sample_list);
     max_rss = (packetbuf_attr_t)data_group_rss;
     t_peak = ((struct rss_sample *)list_tail(ack_rss_sample_list))->timestamp;
@@ -264,13 +288,13 @@ static void estimate_window() {
   else {
     max_rss = sample->rss;
     t_peak = sample->timestamp;
-    using_data_group_peak = 0;
+    //using_data_group_peak = 0;
   }
   PRINTF("estimate_window: data group rss %d\n", (packetbuf_attr_t)data_group_rss);
 
   t_first = t_peak;
   t_last = t_peak;
-  t_next = t_peak;
+  t_next = 0;
 
   while (sample != NULL) {
     next_sample = list_item_next(sample);
@@ -287,18 +311,17 @@ static void estimate_window() {
       if (next_sample != NULL) {
         t_next = next_sample->timestamp;
       }
-      else {
-        t_next = t_peak;
-        PRINTF("estimate_window: no t_next\n");
-      }
     }
-    else if (using_data_group_peak && sample->timestamp <= t_peak && next_sample->timestamp > t_peak) {
+    else if (next_sample != NULL && using_data_group_peak && sample->timestamp <= t_peak && next_sample->timestamp > t_peak) {
       t_next = next_sample->timestamp;
       PRINTF("estimate_window: t_next found\n");
     }
     sample = next_sample;
   }
-  PRINTF("estimate_window: t_first %lu, t_peak %lu, t_next %lu, t_last %lu, max RSS %d\n",
+  if (t_next == 0) {
+    t_next = t_last;
+  }
+  LIM_PRINTF("estimate_window: t_first %lu, t_peak %lu, t_next %lu, t_last %lu, max RSS %d\n",
     (unsigned long)t_first, (unsigned long)t_peak, (unsigned long)t_next, (unsigned long)t_last, max_rss);
 
   estimate = memb_alloc(&window_estimate_memb);
@@ -308,7 +331,8 @@ static void estimate_window() {
     estimate->val = 2*(t_last - t_peak);
   }
   else {
-    estimate->val = (t_last - t_peak) + (t_last - t_next);
+    //estimate->val = (t_last - t_peak) + (t_last - t_next);
+    estimate->val = 2*(t_last - t_next);
   }
 
   /* Check the lower bound */
@@ -316,83 +340,94 @@ static void estimate_window() {
     estimate->val = t_last - t_first;
   }
 
-  PRINTF("estimate_window: this estimate is %lu\n", (unsigned long)estimate->val);
+  LIM_PRINTF("estimate_window: this estimate is %lu\n", (unsigned long)estimate->val);
 
   list_add(window_estimate_list, estimate);
 
   /* Calculate moving average for the window */
   estimate = list_head(window_estimate_list);
-  t_last = 0;
+  moving_avg = 0;
   while (estimate != NULL) {
-    t_last += estimate->val;
+    moving_avg += estimate->val;
     estimate = list_item_next(estimate);
   }
-  t_last /= list_length(window_estimate_list);
+  moving_avg /= list_length(window_estimate_list);
   
   /* Set Tsleep! */
-  _Tsleep = t_last / 2;
-  LIM_PRINTF("estimate_window: tsleep %lu\n", (unsigned long)_Tsleep);
-
+  _Tsleep = (moving_avg / 2) * RTIMER_SECOND / CLOCK_SECOND;
+  LIM_PRINTF("estimate_window: tsleep %u, tbeacon %u, %d\n", _Tsleep, _Tbeacon, list_length(window_estimate_list));
+  WINDOW("%lu %lu\n", (unsigned long)((struct window_estimate *)list_tail(window_estimate_list))->val, (unsigned long)_Tsleep);
   /* Delete RSS samples */
   //clear_rss_samples();
 }
 
 static void sleep(void) {
+  uint64_t temp_time;
+
+  clean_radio();
   NETSTACK_RADIO.off();
   TRACE("%lu RADIO_OFF 0\n", (unsigned long)clock_time());
   radio_is_on = 0;
 
   sending_burst = 0;
+  tx_counter = 0;
 
   rtimer_unset();
 
-  if (_Tsleep < _Tbeacon * CLOCK_SECOND / RTIMER_SECOND) {
+  if (_Tsleep < _Tbeacon) {
     PRINTF("sleep: initializing tsleep\n");
-    _Tsleep = _Tbeacon * CLOCK_SECOND / RTIMER_SECOND;
+    _Tsleep = _Tbeacon;
   }
   PRINTF("sleep: sleeping for %lu\n", _Tsleep);
 
-  ctimer_set(&_wakeupTimer, _Tsleep, wake_up_wrapper, NULL);
+  //ctimer_stop(&_wakeupTimer);
+  //ctimer_set(&_wakeupTimer, _Tsleep, wake_up_wrapper, NULL);
+  temp_time = (uint64_t) RTIMER_NOW() + (uint64_t) _Tsleep;
+  temp_time %= RTIMER_MAX_TICKS;
+  rtimer_set(&_wakeupTimer, temp_time, 1, wake_up, NULL);
   prev_beacon_seen = 0;
+  beacon_phase_known = 0;
 
-  LIM_PRINTF("blademac: Setting sleep timer for %lu (now is %lu), curr state %d\n", (unsigned long)_Tsleep, (unsigned long)clock_time(), current_state);
+  LIM_PRINTF("blademac: Setting sleep timer for %u (now is %u), curr state %d\n", _Tsleep, RTIMER_NOW(), current_state);
 
   clear_rss_samples();
 }
 
 static void nap(void) {
-  uint32_t temp_time;
-  rtimer_clock_t now;
+  static volatile uint64_t temp_time;
+  static volatile rtimer_clock_t now;
   uint16_t beacon_intervals;
 
+  rtimer_unset();
+
   //packetbuf_locked = 0;
+  clean_radio();
   NETSTACK_RADIO.off();
   TRACE("%lu RADIO_OFF 0\n", (unsigned long)clock_time());
   radio_is_on = 0;
 
   sending_burst = 0;
 
-  rtimer_unset();
-
   /* Possible we have to go multiple beacon intervals forward from the last beacon timer expiration*/
   /* Don't listen for the first beacon following data/ack. This first covers an edge case
      where the sink and source are both finishing data/ack, but the sink takes longer to schedule
      the next beacon, so the source wakes for a beacon that isn't sent. */
-  if (estimating_period && current_state == BLADEMAC_STATE_SEND) {
+  /*if (estimating_period && current_state == BLADEMAC_STATE_SEND) {
     current_state = BLADEMAC_STATE_HIBERNATION;
     beacon_intervals = 2;
   }
   else {
     beacon_intervals = 1;
-  }
+  }*/
+  beacon_intervals = 1;
   temp_time = 0;
   do {
-    temp_time = (uint32_t)last_known_beacon + _Tbeacon * beacon_intervals - RTIMER_WAKEUP_BUFFER_TIME;
+    temp_time = (uint64_t)last_known_beacon + (uint64_t)(_Tbeacon * beacon_intervals) - RTIMER_WAKEUP_BUFFER_TIME;
     /* Since rtimer_clock_t is 16-bit for Sky, we can easily have rollover problems */
     /* This solution is kind of hacky, especially if the clock isn't 16-bit... */
-    if (temp_time > 65535) {
+    if (temp_time >= RTIMER_MAX_TICKS) {
       LIM_PRINTF("cpcc-mac: Nap timer rollover\n");
-      temp_time %= 65535;
+      temp_time %= RTIMER_MAX_TICKS;
       now = RTIMER_NOW();
       /* If rtimer is currently at a higher tick than the last time the beacon timer expired,
            then almost certainly that means the next beacon time is after the rollover, but
@@ -414,13 +449,13 @@ static void beacon_timed_out(struct rtimer * rt, void * ptr) {
   sending_burst = 0;
   if (estimating_period) {
     PRINTF("beacon_timed_out: beacon gap detected\n");
-    beacon_gap_seen = 1;
+    //beacon_gap_seen = 1;
     estimating_period = 0;
     //nap();
     estimate_window();
-    turn_radio_off(NULL, NULL);
+    clear_rss_samples();
   }
-  else if (current_state == BLADEMAC_STATE_WAIT && !prev_beacon_seen) {
+  if (current_state == BLADEMAC_STATE_WAIT && !prev_beacon_seen) {
     sleep();
   }
   /* If a beacon timed out after a predicted wakeup, redo the period estimate */
@@ -431,47 +466,95 @@ static void beacon_timed_out(struct rtimer * rt, void * ptr) {
     nap();
   }
   else {
-    LIM_PRINTF("beacon_timed_out: how did I get here?\n");
-    turn_radio_off(NULL, NULL);
+    //LIM_PRINTF("beacon_timed_out: how did I get here?\n");
+    hibernate(NULL, NULL);
   }
 }
 
 static void wake_up(struct rtimer * rt, void * ptr) {
-  rtimer_clock_t timeout_time;
+  static volatile uint64_t timeout_time;
 
   radio_is_on = 1;
   NETSTACK_RADIO.on();
 
-  if (estimating_period) {
+  if (beacon_phase_known) {
     //beacon_intervals_napped++;
     timeout_time = RTIMER_NOW() + INTER_PACKET_DEADLINE;
   }
   else {
-    timeout_time = RTIMER_NOW() + _Tbeacon;
+    timeout_time = RTIMER_NOW() + _Tbeacon + RTIMER_WAKEUP_BUFFER_TIME;
   }
 
-  timeout_time %= 65536;
+  timeout_time %= RTIMER_MAX_TICKS;
 
   rtimer_unset();
-  rtimer_set(&_offTimer, timeout_time, 1, beacon_timed_out, NULL);
+  rtimer_set(&_offTimer, (rtimer_clock_t)timeout_time, 1, beacon_timed_out, NULL);
   sending_burst = 1;
 
   TRACE("%lu RADIO_ON 0\n", (unsigned long)clock_time());
   return;
 }
 
-static void wake_up_wrapper(void * ptr) {
+/*static void wake_up_wrapper(void * ptr) {
   wake_up(NULL, ptr);
+}*/
+
+static void set_periodic_rtimer(struct rtimer * rt, rtimer_clock_t interval, rtimer_callback_t func) {
+  static volatile uint64_t a = 0;
+  static volatile uint64_t b = 0;
+  static volatile rtimer_clock_t now = 0;
+  
+  a = (uint64_t) RTIMER_TIME(rt);
+  b = a + interval;
+  now = RTIMER_NOW();
+
+  while (1) {
+    if (b >= RTIMER_MAX_TICKS) {
+      b = b % RTIMER_MAX_TICKS;
+      if (RTIMER_MAX_TICKS - 1 - now <= interval) {
+        break;
+      }
+    }
+    else if (now >= b) {
+      b = b + interval;
+    }
+    else if (a >= now && a <= b) {
+      if (a - now <= interval) {
+        break;
+      }
+      b = b + interval;
+    }
+    else {
+      break;
+    }
+  }
+
+  now = RTIMER_NOW();
+  if (b - now < INTER_PACKET_DEADLINE) {
+    b = (b + interval) % RTIMER_MAX_TICKS;
+  }
+
+  rtimer_set(rt, (rtimer_clock_t)b, 1, func, NULL);
+  LIM_PRINTF("set_periodic_rtimer: Setting timer for %u (now is %u)\n", (uint16_t)b, (uint16_t) now);
 }
 
-static void turn_radio_off(struct rtimer * rt, void * ptr) {
-  rtimer_clock_t now;
-  uint8_t beacon_intervals;
-  uint32_t temp_time;
+static void clean_radio(void) {
+  /* Throw away anything still stuck in the radio */
+  if (NETSTACK_RADIO.pending_packet()) {
+    LIM_PRINTF("clean_radio: removing pending packet\n");
+    NETSTACK_RADIO.read(_backupPacketbuf, PACKETBUF_SIZE);
+  }
+}
 
-  PRINTF("turn_radio_off: Turning off.\n");
+static void hibernate(struct rtimer * rt, void * ptr) {
+  //rtimer_clock_t now;
+  //uint8_t beacon_intervals;
+  //uint32_t temp_time;
+
+  PRINTF("hibernate: Turning off.\n");
   process_exit(&wait_to_send_process);
   packetbuf_locked = 0;
+  clean_radio();
   NETSTACK_RADIO.off();
   TRACE("%lu RADIO_OFF 0\n", (unsigned long)clock_time());
 #if COMPOWER_ON
@@ -484,48 +567,61 @@ static void turn_radio_off(struct rtimer * rt, void * ptr) {
   sending_burst = 0;
   receiving_burst = 0;
   tx_counter = 0;
-  _backupPacketbufLen = 0;
+  //_backupPacketbufLen = 0;
 
   prev_beacon_seen = 0;
+  beacon_phase_known = 0;
   current_state = BLADEMAC_STATE_HIBERNATION;
   estimating_period = 0;
   
+  //ctimer_stop(&_wakeupTimer);
   rtimer_unset();
   /* Set timer for the next beacon */
   if (IS_SINK && sink_is_beaconing) {
+    set_periodic_rtimer(&_beaconTimer, _Tbeacon, send_beacon);
     /* Possible we have to go multiple beacon intervals forward from the last beacon timer expiration*/
-    beacon_intervals = 1;
-    temp_time = 0;
-    do {
-      temp_time = (uint32_t)RTIMER_TIME(&_beaconTimer) + _Tbeacon * beacon_intervals;
+//    now = RTIMER_NOW();
+ //   temp_time = 65536;
+ //   if (now > RTIMER_TIME(&_beaconTimer)) {
+ //     beacon_intervals = (now - RTIMER_TIME(&_beaconTimer)) / _Tbeacon;
+ //   }
+ //   else {
+  //    temp_time += now;
+  //    beacon_intervals = (temp_time - RTIMER_TIME(&_beaconTimer)) / _Tbeacon;;
+//    }
+//    temp_time = 0;
+//    do {
+//      temp_time = (uint32_t)RTIMER_TIME(&_beaconTimer) + (uint32_t)_Tbeacon * beacon_intervals;
       /* Since rtimer_clock_t is 16-bit for Sky, we can easily have rollover problems */
       /* This solution is kind of hacky, especially if the clock isn't 16-bit... */
-      if (temp_time > 65535) {
-        LIM_PRINTF("cc-mac: Beacon timer rollover\n");
-        temp_time -= 65535;
-        now = RTIMER_NOW();
+//      if (temp_time > 65535) {
+//        LIM_PRINTF("cc-mac: Beacon timer rollover\n");
+//        temp_time -= 65536;
+//        now = RTIMER_NOW();
         /* If rtimer is currently at a higher tick than the last time the beacon timer expired,
            then almost certainly that means the next beacon time is after the rollover, but
            the rollover hasn't happened yet. Otherwise, the rollover has already happened and we
            need to keep adding beacon intervals if temp_time is less than now.
            There may be some really weird edge case where all this isn't true - not sure. */
-        if (now > RTIMER_TIME(&_beaconTimer)) {
-          break;
-        }
-      }
-      beacon_intervals++;
-      now = RTIMER_NOW();
-    } while (temp_time < now);
-    LIM_PRINTF("cc-mac: Setting beacon timer for %u (now is %u) %d %u\n", (uint16_t)temp_time, now, beacon_intervals, RTIMER_TIME(&_beaconTimer));
-    rtimer_set(&_beaconTimer, (rtimer_clock_t)temp_time, 1, send_beacon, NULL);
+//        if (now > RTIMER_TIME(&_beaconTimer)) {
+//          break;
+//        }
+//      }
+//      beacon_intervals++;
+//      now = RTIMER_NOW();
+//    } while (temp_time + 300 < now);
+//    LIM_PRINTF("cc-mac: Setting beacon timer for %u (now is %u) %d %u\n", (uint16_t)temp_time, now, beacon_intervals, RTIMER_TIME(&_beaconTimer));
+//    rtimer_set(&_beaconTimer, (rtimer_clock_t)temp_time, 1, send_beacon, NULL);
   }
   else if (!IS_SINK) {
     clear_rss_samples();
   }
+  
 }
 
 static void retry_packet(struct rtimer * rt, void * ptr) {
   uint8_t max_txs;
+  static volatile uint8_t curr_txs;
 
   if (packetbuf_attr(PACKETBUF_ATTR_MAX_MAC_TRANSMISSIONS) == 0) {
     max_txs = 1;
@@ -534,9 +630,17 @@ static void retry_packet(struct rtimer * rt, void * ptr) {
     max_txs = packetbuf_attr(PACKETBUF_ATTR_MAX_MAC_TRANSMISSIONS);
   }
   if (tx_counter >= max_txs) {
-    PRINTF("retry_packet: max transmissions have failed, canceling\n");
-    turn_radio_off(NULL, NULL);
-    mac_call_sent_callback(_sent_callback, _ptr, MAC_TX_NOACK, tx_counter);
+    curr_txs = tx_counter;
+    LIM_PRINTF("retry_packet: max transmissions have failed, sleeping\n");
+    //hibernate(NULL, NULL);
+    if (estimating_period) {
+      estimating_period = 0;
+      estimate_window();
+      clear_rss_samples();
+    }
+    current_state = BLADEMAC_STATE_WAIT;
+    sleep();
+    mac_call_sent_callback(_sent_callback, _ptr, MAC_TX_NOACK, curr_txs);
     return;
   }
 
@@ -548,14 +652,14 @@ static int send_packet() {
   PRINTF("send_packet: Sending packet.\n");
   if (!packetbuf_attr(PACKETBUF_ATTR_IS_CREATED_AND_SECURED)) {
     if (NETSTACK_FRAMER.create() < 0) {
-      PRINTF("send_packet: framer failed.\n");
+      LIM_PRINTF("send_packet: framer failed.\n");
       return MAC_TX_ERR_FATAL;
     }
   }
 
   if (!NETSTACK_RADIO.channel_clear() || NETSTACK_RADIO.receiving_packet() ||
       NETSTACK_RADIO.pending_packet()) {
-    PRINTF("send_packet: other activity detected.\n");
+    LIM_PRINTF("send_packet: other activity detected.\n");
     return MAC_TX_COLLISION;
   }
 
@@ -610,7 +714,7 @@ static void send_beacon(struct rtimer * rt, void * ptr) {
 
   if (ret != MAC_TX_OK) {
     PRINTF("send_beacon: Beacon failed, skipping.\n");
-    turn_radio_off(NULL, NULL);
+    hibernate(NULL, NULL);
     return;
   }
 
@@ -619,7 +723,7 @@ static void send_beacon(struct rtimer * rt, void * ptr) {
   leds_toggle(LEDS_GREEN);
   #endif
 
-  rtimer_set(&_offTimer, RTIMER_NOW() + INTER_PACKET_DEADLINE, 1, turn_radio_off, NULL);
+  rtimer_set(&_offTimer, RTIMER_NOW() + INTER_PACKET_DEADLINE, 1, hibernate, NULL);
 
   return;
 }
@@ -627,16 +731,16 @@ static void send_beacon(struct rtimer * rt, void * ptr) {
 PROCESS_THREAD(wait_to_send_process, ev, data) {
   PROCESS_BEGIN();
 
-  static struct rdc_buf_list *curr;
-  static struct rdc_buf_list *next;
+//  static struct rdc_buf_list *curr;
+//  static struct rdc_buf_list *next;
   static int ret;
 
   static int old_packet;
-  static uint16_t *pktSeqno;
+  //static uint16_t *pktSeqno;
 
-  if (data != NULL) {
-    curr = data;
-  }
+  //if (data != NULL) {
+  //  curr_ = data;
+  //}
 
   old_packet = 0;
 
@@ -648,8 +752,8 @@ PROCESS_THREAD(wait_to_send_process, ev, data) {
       /* if we've tried this packet already and the tx count is 0, 
          then we must got an ack, so we ready a new packet */
       if (old_packet && tx_counter == 0) {
-        if (next != NULL) {
-          curr = next;
+        if (next_packet != NULL) {
+          curr_packet = next_packet;
           old_packet = 0;
         }
         else {
@@ -673,26 +777,39 @@ PROCESS_THREAD(wait_to_send_process, ev, data) {
       }
 
       packetbuf_locked = 1;
-      next = list_item_next(curr);
-      queuebuf_to_packetbuf(curr->buf);
+      next_packet = list_item_next(curr_packet);
+      queuebuf_to_packetbuf(curr_packet->buf);
+
+
 
       ret = send_packet();
-      TRACE("%lu DATA 0 %u\n", (unsigned long)clock_time(), packetbuf_attr(PACKETBUF_ATTR_MAC_SEQNO));
-      packetbuf_locked = 0;
+#if TRACE_ON
+      if (tx_counter <= 1) {
+        TRACE("%lu DATA 0 %u\n", (unsigned long)clock_time(), packetbuf_attr(PACKETBUF_ATTR_MAC_SEQNO));
+      }
+      else {
+        TRACE("%lu RETRY 0 %u\n", (unsigned long)clock_time(), packetbuf_attr(PACKETBUF_ATTR_MAC_SEQNO));
+      }
+#endif
+      /* Also copy to backup buf so we can do send callback after ack */
+      //packetbuf_copyto(_backupPacketbuf);
+      //_backupPacketbufLen = packetbuf_totlen();
 
       if (ret == MAC_TX_ERR_FATAL || ret == MAC_TX_ERR) {
-        pktSeqno = (uint16_t *)_ptr;
-        *pktSeqno = packetbuf_attr(PACKETBUF_ATTR_MAC_SEQNO);
+        //pktSeqno = (uint16_t *)_ptr;
+        //*pktSeqno = packetbuf_attr(PACKETBUF_ATTR_MAC_SEQNO);
         mac_call_sent_callback(_sent_callback, _ptr, MAC_TX_ERR_FATAL, 1);
         off(0);
         break;
       }
 
+      packetbuf_locked = 0;
+
       rtimer_set(&_offTimer, RTIMER_NOW() + INTER_PACKET_DEADLINE, 1, retry_packet, NULL);
       
     } while (1);
 
-  turn_radio_off(NULL, NULL);
+  hibernate(NULL, NULL);
   PROCESS_END();
 }
 
@@ -709,8 +826,8 @@ static void init(void) {
   _Tbeacon = INITIAL_TBEACON;
   memb_init(&rss_sample_memb);
   memb_init(&window_estimate_memb);
-  /* Call turn_radio_off to clear all flags and whatnot */
-  turn_radio_off(NULL, NULL);
+  /* Call hibernate to clear all flags and whatnot */
+  hibernate(NULL, NULL);
   on();
 }
 
@@ -796,7 +913,9 @@ static void send_list(mac_callback_t sent_callback, void *ptr, struct rdc_buf_li
     wake_up(NULL, NULL);
   }
   current_state = BLADEMAC_STATE_WAIT;
-  process_start(&wait_to_send_process, buf_list);
+  //process_start(&wait_to_send_process, buf_list);
+  curr_packet = buf_list;
+  process_start(&wait_to_send_process, NULL);
  
   
   return;
@@ -804,9 +923,10 @@ static void send_list(mac_callback_t sent_callback, void *ptr, struct rdc_buf_li
 
 static void input(void) {
   int ret;
-  uint16_t dataSeqno;
-  uint16_t *ackSeqno;
+  uint8_t dataSeqno;
+  //uint16_t *ackSeqno;
   uint16_t pending;
+  static uint32_t temp_time;
   rtimer_clock_t rtimer_now;
   packetbuf_attr_t curr_rss;
   struct rss_sample *sample;
@@ -820,8 +940,6 @@ static void input(void) {
   now = clock_time();
 
   //LIM_PRINTF("input: Handed packet from radio w/ RSSI %d.\n", packetbuf_attr(PACKETBUF_ATTR_RSSI));
-  /* Stay awake for now - listen for another possible packet */
-  rtimer_unset();
 
   /* Check if the packetbuf is locked, but I think we need to go ahead anyway */
   if (packetbuf_locked) {
@@ -831,17 +949,19 @@ static void input(void) {
   curr_rss = packetbuf_attr(PACKETBUF_ATTR_RSSI);
 
   if (NETSTACK_FRAMER.parse() < 0) {
-    PRINTF("input: Framer failed to parse packet.\n");
+    LIM_PRINTF("input: Framer failed to parse packet.\n");
     packetbuf_locked = 0;
-    rtimer_set(&_offTimer, RTIMER_NOW() + INTER_PACKET_DEADLINE, 1, turn_radio_off, NULL);
+    //rtimer_set(&_offTimer, RTIMER_NOW() + INTER_PACKET_DEADLINE, 1, hibernate, NULL);
     return;
   }
+
+  /* Stay awake for now - listen for another possible packet */
+  rtimer_unset();
 
   switch (packetbuf_attr(PACKETBUF_ATTR_PACKET_TYPE)) {
     case PACKETBUF_ATTR_PACKET_TYPE_BEACON:
       packetbuf_locked = 0;
       last_known_beacon = rtimer_now;
-      prev_beacon_seen = 1;
 
       LIM_PRINTF("input: It's a beacon! current state %d\n", current_state);
       TRACE("%lu BEACON_RECEIVED %d\n", (unsigned long)now, curr_rss);
@@ -854,11 +974,13 @@ static void input(void) {
           PRINTF("input: panic mode - send data now!\n");
           current_state = BLADEMAC_STATE_SEND;
         }
-        else if (!prev_beacon_seen || prev_beacon_rss < curr_rss) {
+        else if (!prev_beacon_seen || prev_beacon_rss <= curr_rss) {
           nap();
         }
       }
       prev_beacon_rss = curr_rss;
+      prev_beacon_seen = 1;
+      beacon_phase_known = 1;
 
       sample = memb_alloc(&rss_sample_memb);
       if (sample != NULL) {
@@ -898,7 +1020,10 @@ static void input(void) {
       }
       break;
     case PACKETBUF_ATTR_PACKET_TYPE_DATA:
-      dataSeqno = packetbuf_attr(PACKETBUF_ATTR_MAC_SEQNO);
+      if (!IS_SINK) {
+        return;
+      }
+      dataSeqno = (uint8_t)packetbuf_attr(PACKETBUF_ATTR_MAC_SEQNO);
       pending = packetbuf_attr(PACKETBUF_ATTR_PENDING);
       PRINTF("input: It's data! seqno %d\n", dataSeqno);
       TRACE("%lu DATA_RECEIVED %d %u\n", (unsigned long)now, packetbuf_attr(PACKETBUF_ATTR_RSSI), dataSeqno);
@@ -938,13 +1063,19 @@ static void input(void) {
         PRINTF("input: Ack send failed.\n");
       }
       //if (!pending) {
-        rtimer_set(&_offTimer, RTIMER_NOW() + INTER_PACKET_DEADLINE, 1, turn_radio_off, NULL);
+        
       //}
 
       packetbuf_copyfrom(_backupPacketbuf, _backupPacketbufLen);
-      _backupPacketbufLen = 0;
+      //_backupPacketbufLen = 0;
 
       NETSTACK_MAC.input();
+
+
+      temp_time = RTIMER_NOW() + INTER_PACKET_DEADLINE + INTER_PACKET_DEADLINE + INTER_PACKET_DEADLINE;
+      LIM_PRINTF("temp_time %lu, %u, %d, %u\n", temp_time, RTIMER_NOW(), INTER_PACKET_DEADLINE, RTIMER_SECOND);
+      temp_time %= 65536;
+      rtimer_set(&_offTimer, (rtimer_clock_t)temp_time, 1, hibernate, NULL);
 
       packetbuf_locked = 0;
       break;
@@ -957,7 +1088,8 @@ static void input(void) {
         wake_up(NULL, NULL);
         return;
       }
-      TRACE("%lu ACK_RECEIVED %d %u\n", (unsigned long)now, packetbuf_attr(PACKETBUF_ATTR_RSSI), packetbuf_attr(PACKETBUF_ATTR_MAC_SEQNO));
+      dataSeqno = (uint8_t)packetbuf_attr(PACKETBUF_ATTR_MAC_SEQNO);
+      TRACE("%lu ACK_RECEIVED %d %u\n", (unsigned long)now, packetbuf_attr(PACKETBUF_ATTR_RSSI), dataSeqno);
       if (!estimating_period) {
         sample = memb_alloc(&rss_sample_memb);
         if (sample != NULL) {
@@ -971,13 +1103,23 @@ static void input(void) {
         }
       }
 
-      /* Use the seqno to ID the packet instead of loading it back into packetbuf */
-      ackSeqno = (uint16_t *)_ptr;
-      *ackSeqno = packetbuf_attr(PACKETBUF_ATTR_MAC_SEQNO);
+      
+      //packetbuf_copyfrom(_backupPacketbuf, _backupPacketbufLen);
+      queuebuf_to_packetbuf(curr_packet->buf);
+
+      if (dataSeqno != packetbuf_attr(PACKETBUF_ATTR_MAC_SEQNO)) {
+        LIM_PRINTF("input: Wrong seqno in ack, discarding. %d, %d\n", dataSeqno, packetbuf_attr(PACKETBUF_ATTR_MAC_SEQNO));
+        packetbuf_locked = 0;
+        process_post_synch(&wait_to_send_process, PROCESS_EVENT_CONTINUE, NULL);
+        return;
+      }
+
+      mac_call_sent_callback(_sent_callback, _ptr, MAC_TX_OK, 1);
+      
       packetbuf_locked = 0;
       tx_counter = 0;
 
-      mac_call_sent_callback(_sent_callback, _ptr, MAC_TX_OK, 1);
+      
 
       if (!packetbuf_attr(PACKETBUF_ATTR_PENDING)) {
         if (current_state != BLADEMAC_STATE_SEND) {
@@ -986,7 +1128,7 @@ static void input(void) {
         }
         LIM_PRINTF("final ack received\n");
         process_exit(&wait_to_send_process);
-        //current_state = BLADEMAC_STATE_HIBERNATION;
+        current_state = BLADEMAC_STATE_HIBERNATION;
         sending_burst = 0;
         //if (period_estimate == 0) {
         if (USE_EXTRA_BEACONS && !estimating_period) {
@@ -998,16 +1140,18 @@ static void input(void) {
           nap();
         }
         else {
-          turn_radio_off(NULL, NULL);
+          hibernate(NULL, NULL);
         }
       }
       else {
+        curr_packet = next_packet;
         process_post_synch(&wait_to_send_process, PROCESS_EVENT_CONTINUE, NULL);
       }
 #if LOG_DELAY
       for (i = 0; i < MAX_QUEUED_PACKETS; i++) {
-        if (delay_seqnos[i] == *ackSeqno) {
-          PRINT_DELAY("%u %lu\n", *ackSeqno, (unsigned long)(now - delay_timestamp));
+        //LIM_PRINTF("Looking for delay timestamp\n");
+        if (delay_seqnos[i] == dataSeqno) {
+          PRINT_DELAY("%u %lu\n", dataSeqno, (unsigned long)(now - delay_timestamp));
           break;
         }
       }
@@ -1039,7 +1183,7 @@ static int on(void) {
 static int off(int keep_radio_on) {
   sink_is_beaconing = 0;
   if (!keep_radio_on) {
-    turn_radio_off(NULL, NULL);
+    hibernate(NULL, NULL);
   }
   return 1;
 }

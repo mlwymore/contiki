@@ -32,7 +32,7 @@
 
 /*Adapted from "example-unicast.c" to read rssi from packets. Intended to be
 used with nullrdc and nullmac.*/
-#define MYRINTERVAL 256
+#define MYRINTERVAL RTIMER_SECOND / 250
 #include "contiki.h"
 #include "net/rime/rime.h"
 #include "dev/radio.h"
@@ -50,11 +50,11 @@ recv_uc(struct broadcast_conn *c, const linkaddr_t *from)
   rtimer_clock_t tick = RTIMER_NOW();
   packetbuf_attr_t rssi = packetbuf_attr(PACKETBUF_ATTR_RSSI);
   //packetbuf_attr_t txpwr = packetbuf_attr(PACKETBUF_ATTR_RADIO_TXPOWER);
-  radio_value_t txpwr;
-  NETSTACK_RADIO.get_value(RADIO_PARAM_TXPOWER,&txpwr);
+  //radio_value_t txpwr;
+  //NETSTACK_RADIO.get_value(RADIO_PARAM_TXPOWER,&txpwr);
   //printf("%lu %lu %d\n",sec,(unsigned long)tick,rssi);
   //printf("%lu %d %d\n",(unsigned long)tick,rssi,txpwr);
-  printf("%lu %d\n",(unsigned long)tick,rssi);
+  printf("RSS %lu %d\n",(unsigned long)tick,rssi);
   //printf("%d\n",rssi);
 }
 /*---------------------------------------------------------------------------*/
@@ -99,14 +99,14 @@ static uint8_t r_func(struct rtimer *rt, void *ptr){
 
 PROCESS_THREAD(sim_p, ev, data){
   PROCESS_EXITHANDLER(broadcast_close(&bc);)
-  addr.u8[0] = 212;
-  addr.u8[1] = 5;
-  //addr.u8[0] = 1;
-  //addr.u8[1] = 0;
+  //addr.u8[0] = 212;
+  //addr.u8[1] = 5;
+  addr.u8[0] = 2;
+  addr.u8[1] = 0;
 
   PROCESS_BEGIN();
 
-  NETSTACK_RADIO.set_value(RADIO_PARAM_TXPOWER,-21);
+  //NETSTACK_RADIO.set_value(RADIO_PARAM_TXPOWER,-21);
   broadcast_open(&bc,146,&broadcast_callbacks);
   uint8_t ret = 0;
   if(!linkaddr_cmp(&addr, &linkaddr_node_addr)){

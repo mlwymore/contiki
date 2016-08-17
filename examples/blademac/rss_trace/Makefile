@@ -1,6 +1,6 @@
-CONTIKI = ../../../../..
-APPS+=powertrace
-all: example-broadcast
+CONTIKI = ../../..
+
+all: rss_trace
 
 CONTIKI_WITH_RIME = 1
 CFLAGS += -DPROJECT_CONF_H=\"project-conf.h\"
