@@ -37,7 +37,7 @@
  *         Mat Wymore <mlwymore@iastate.edu>
  */
 
-#define LOG_DELAY 0
+#define LOG_DELAY 1
 #define LOG_WINDOW 1
 #define DEBUG 0
 #define LIMITED_DEBUG 0
@@ -59,8 +59,17 @@
 #if LOG_DELAY
 #define MAX_QUEUED_PACKETS 16
 #include <stdio.h>
-uint8_t delay_seqnos[MAX_QUEUED_PACKETS];
-clock_time_t delay_timestamp;
+#include <lib/memb.h>
+#include <lib/list.h>
+struct delay_info {
+  void * next;
+  uint8_t seqno;
+  clock_time_t timestamp;
+};
+MEMB(delay_info_memb, struct delay_info, MAX_QUEUED_PACKETS);
+LIST(delay_info_list);
+//uint8_t delay_seqnos[MAX_QUEUED_PACKETS];
+//clock_time_t delay_timestamp;
 #define PRINT_DELAY(format, ...) printf("DELAY " format, __VA_ARGS__)
 #endif
 
@@ -824,6 +833,9 @@ static void send_list(mac_callback_t sent_callback, void *ptr, struct rdc_buf_li
 static void init(void) {
   PRINTF("init: Initializing CC-MAC\n");
   _Tbeacon = INITIAL_TBEACON;
+#if LOG_DELAY
+  memb_init(&delay_info_memb);
+#endif
   memb_init(&rss_sample_memb);
   memb_init(&window_estimate_memb);
   /* Call hibernate to clear all flags and whatnot */
@@ -847,6 +859,10 @@ static void send_list(mac_callback_t sent_callback, void *ptr, struct rdc_buf_li
   struct rdc_buf_list *curr;
   struct rdc_buf_list *next;
 
+#if LOG_DELAY
+  struct delay_info *dinfo;
+#endif
+
   //clock_time_t next_wakeup;
 
   PRINTF("send_list: Packets to send.\n");
@@ -861,18 +877,6 @@ static void send_list(mac_callback_t sent_callback, void *ptr, struct rdc_buf_li
   packetbuf_locked = 1;
   TRACE("%lu DATA_ARRIVAL 0\n", (unsigned long)clock_time());
   //sending_burst = 1;
-
-#if LOG_DELAY
-  int i = 0;
-
-  delay_timestamp = clock_time();
-
-  for (i = 0; i < MAX_QUEUED_PACKETS; i++) {
-    delay_seqnos[i] = 0;
-  }
-
-  i = 0;
-#endif
  
   curr = buf_list;
   do {
@@ -895,8 +899,23 @@ static void send_list(mac_callback_t sent_callback, void *ptr, struct rdc_buf_li
     }
 
 #if LOG_DELAY
-    delay_seqnos[i] = packetbuf_attr(PACKETBUF_ATTR_MAC_SEQNO);
-    i++;
+    dinfo = list_head(delay_info_list);
+    do {
+      if (dinfo == NULL) {
+        break;
+      }
+      if (dinfo->seqno == packetbuf_attr(PACKETBUF_ATTR_MAC_SEQNO)) {
+        break;
+      }
+      dinfo = list_item_next(dinfo);
+    } while (dinfo != NULL);
+
+    if (dinfo == NULL) {
+      dinfo = memb_alloc(&delay_info_memb);
+      dinfo->seqno = packetbuf_attr(PACKETBUF_ATTR_MAC_SEQNO);
+      dinfo->timestamp = clock_time();
+      list_add(delay_info_list, dinfo);
+    }
 #endif
     curr = next;
   } while(next != NULL);
@@ -931,7 +950,7 @@ static void input(void) {
   packetbuf_attr_t curr_rss;
   struct rss_sample *sample;
 #if LOG_DELAY
-  int i = 0;
+  struct delay_info * dinfo;
 #endif
 
   clock_time_t now;
@@ -1074,7 +1093,7 @@ static void input(void) {
 
       temp_time = RTIMER_NOW() + INTER_PACKET_DEADLINE + INTER_PACKET_DEADLINE + INTER_PACKET_DEADLINE;
       LIM_PRINTF("temp_time %lu, %u, %d, %u\n", temp_time, RTIMER_NOW(), INTER_PACKET_DEADLINE, RTIMER_SECOND);
-      temp_time %= 65536;
+      temp_time %= RTIMER_MAX_TICKS;
       rtimer_set(&_offTimer, (rtimer_clock_t)temp_time, 1, hibernate, NULL);
 
       packetbuf_locked = 0;
@@ -1148,13 +1167,18 @@ static void input(void) {
         process_post_synch(&wait_to_send_process, PROCESS_EVENT_CONTINUE, NULL);
       }
 #if LOG_DELAY
-      for (i = 0; i < MAX_QUEUED_PACKETS; i++) {
-        //LIM_PRINTF("Looking for delay timestamp\n");
-        if (delay_seqnos[i] == dataSeqno) {
-          PRINT_DELAY("%u %lu\n", dataSeqno, (unsigned long)(now - delay_timestamp));
+      dinfo = list_head(delay_info_list);
+      do {
+        if (dinfo == NULL) {
           break;
         }
-      }
+        if (dinfo->seqno == dataSeqno) {
+          PRINT_DELAY("%u %lu\n", dataSeqno, (unsigned long)(now - dinfo->timestamp));
+          list_remove(delay_info_list, dinfo);
+          memb_free(&delay_info_memb, dinfo);
+          break;
+        }
+      } while (dinfo != NULL);
 #endif
       break;
   }
