@@ -213,7 +213,6 @@ public class LSRM extends AbstractRadioMedium {
     else if (prr_hat < 0) {
       prr_hat = -0.1;
     }
-    System.out.println("snr: " + SNR + ",  prr: " + prr_hat);
     return prr_hat;
   }
 
@@ -224,7 +223,6 @@ public class LSRM extends AbstractRadioMedium {
     double rxPower = txPower - getPathLoss(source, dest);
     double noise = dest.getCurrentSignalStrength();
     double snr = rxPower - noise;
-    System.out.println("txPower: " + txPower + ", rxPower: " + rxPower + ", noise: " + noise);
     return snrToPrr(snr);
   }
 

@@ -37,6 +37,8 @@
  *         Mat Wymore <mlwymore@iastate.edu>
  */
 
+#define LOG_PERIOD 1
+#define LOG_RETRIES 1
 #define LOG_DELAY 1
 #define DEBUG 0
 #define LIMITED_DEBUG 0
@@ -52,6 +54,12 @@
 #define TRACE(format, ...) printf("TRACE " format, __VA_ARGS__)
 #else
 #define TRACE(...)
+#endif
+
+#if LOG_RETRIES
+#define PRINT_RETRIES(format, ...) printf("RETRIES " format, __VA_ARGS__)
+#else
+#define PRINT_RETRIES(...)
 #endif
 
 
@@ -72,11 +80,11 @@ LIST(delay_info_list);
 #define PRINT_DELAY(format, ...) printf("DELAY " format, __VA_ARGS__)
 #endif
 
-#if LOG_WINDOW
+#if LOG_PERIOD
 #include <stdio.h>
-#define WINDOW(format, ...) printf("WINDOW " format, __VA_ARGS__)
+#define PERIOD(format, ...) printf("PERIOD " format, __VA_ARGS__)
 #else
-#define WINDOW(...)
+#define PERIOD(...)
 #endif
 
 #include "contiki-conf.h"
@@ -648,6 +656,9 @@ static void retry_packet(struct rtimer * rt, void * ptr) {
   else {
     max_txs = packetbuf_attr(PACKETBUF_ATTR_MAX_MAC_TRANSMISSIONS);
   }
+
+  PRINT_RETRIES("%u\n", packetbuf_attr(PACKETBUF_ATTR_MAC_SEQNO));
+
   if (tx_counter >= max_txs) {
     curr_txs = tx_counter;
     //tx_counter = 0;
@@ -764,7 +775,7 @@ PROCESS_THREAD(wait_to_send_process, ev, data) {
   //  curr_ = data;
   //}
 
-  old_packet = 0;
+  //old_packet = 0;
 
     do {
       PROCESS_WAIT_EVENT_UNTIL(sink_is_awake && ev == PROCESS_EVENT_CONTINUE);
@@ -773,7 +784,7 @@ PROCESS_THREAD(wait_to_send_process, ev, data) {
 
       /* if we've tried this packet already and the tx count is 0, 
          then we must got an ack, so we ready a new packet */
-      if (old_packet && tx_counter == 0) {
+      /*if (old_packet && tx_counter == 0) {
         if (next_packet != NULL) {
           curr_packet = next_packet;
           old_packet = 0;
@@ -781,10 +792,10 @@ PROCESS_THREAD(wait_to_send_process, ev, data) {
         else {
           break;
         }
-      }
+      }*/
 
       tx_counter++;
-      old_packet = 1;
+      //old_packet = 1;
 
       PRINTF("wait_to_send_process: Time to send!\n");
       #if LEDS
@@ -1010,6 +1021,7 @@ static void input(void) {
       if (estimating_period && beacon_gap_seen) {
         period_estimate = now - last_known_rendezvous;
         LIM_PRINTF("input: estimated period of %d\n", (int)period_estimate);
+        PERIOD("%lu\n", period_estimate);
         estimating_period = 0;
         beacon_gap_seen = 0;
         //last_known_rendezvous = now;
@@ -1185,6 +1197,7 @@ static void input(void) {
           memb_free(&delay_info_memb, dinfo);
           break;
         }
+        dinfo = list_item_next(dinfo);
       } while (dinfo != NULL);
 #endif
       break;

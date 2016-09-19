@@ -37,6 +37,7 @@
  *         Mat Wymore <mlwymore@iastate.edu>
  */
 
+#define LOG_RETRIES 1
 #define LOG_DELAY 1
 #define LOG_WINDOW 1
 #define DEBUG 0
@@ -53,6 +54,12 @@
 #define TRACE(format, ...) printf("TRACE " format, __VA_ARGS__)
 #else
 #define TRACE(...)
+#endif
+
+#if LOG_RETRIES
+#define PRINT_RETRIES(format, ...) printf("RETRIES " format, __VA_ARGS__)
+#else
+#define PRINT_RETRIES(...)
 #endif
 
 
@@ -189,7 +196,7 @@ enum {
 };
 static uint8_t current_state = 0;
 #define USE_EXTRA_BEACONS 1
-#define FAVORABLE_THRESHOLD -80
+#define FAVORABLE_THRESHOLD -90
 
 struct rss_sample {
   struct rss_sample *next;
@@ -475,7 +482,7 @@ static void beacon_timed_out(struct rtimer * rt, void * ptr) {
     nap();
   }
   else {
-    //LIM_PRINTF("beacon_timed_out: how did I get here?\n");
+    LIM_PRINTF("beacon_timed_out: how did I get here?\n");
     hibernate(NULL, NULL);
   }
 }
@@ -638,6 +645,9 @@ static void retry_packet(struct rtimer * rt, void * ptr) {
   else {
     max_txs = packetbuf_attr(PACKETBUF_ATTR_MAX_MAC_TRANSMISSIONS);
   }
+
+  PRINT_RETRIES("%u\n", packetbuf_attr(PACKETBUF_ATTR_MAC_SEQNO));
+
   if (tx_counter >= max_txs) {
     curr_txs = tx_counter;
     LIM_PRINTF("retry_packet: max transmissions have failed, sleeping\n");
@@ -751,7 +761,7 @@ PROCESS_THREAD(wait_to_send_process, ev, data) {
   //  curr_ = data;
   //}
 
-  old_packet = 0;
+  //old_packet = 0;
 
     do {
       PROCESS_WAIT_EVENT_UNTIL(sink_is_awake && ev == PROCESS_EVENT_CONTINUE);
@@ -760,18 +770,19 @@ PROCESS_THREAD(wait_to_send_process, ev, data) {
 
       /* if we've tried this packet already and the tx count is 0, 
          then we must got an ack, so we ready a new packet */
-      if (old_packet && tx_counter == 0) {
+      /*if (queue_new_packet) {
+        queue_new_packet = 0;
         if (next_packet != NULL) {
           curr_packet = next_packet;
-          old_packet = 0;
+          //old_packet = 0;
         }
         else {
           break;
         }
-      }
+      }*/
 
       tx_counter++;
-      old_packet = 1;
+      //old_packet = 1;
 
       PRINTF("wait_to_send_process: Time to send!\n");
       #if LEDS
@@ -929,6 +940,8 @@ static void send_list(mac_callback_t sent_callback, void *ptr, struct rdc_buf_li
   /* If we're waiting for extra beacons, or if we're already in the wait state,
      we want to follow the existing wakeup schedule */
   if (current_state == BLADEMAC_STATE_HIBERNATION && !estimating_period) {
+    /* Because weirdness */
+    current_state = BLADEMAC_STATE_WAIT;
     wake_up(NULL, NULL);
   }
   current_state = BLADEMAC_STATE_WAIT;
@@ -1178,7 +1191,11 @@ static void input(void) {
           memb_free(&delay_info_memb, dinfo);
           break;
         }
+        dinfo = list_item_next(dinfo);
       } while (dinfo != NULL);
+      if (dinfo == NULL) {
+        PRINT_DELAY("Delay info not found for %u\n", dataSeqno);
+      }
 #endif
       break;
   }

@@ -49,8 +49,8 @@
 
 #include <stdio.h>
 
-#define DATA_ARRIVAL_INTERVAL 1
-#define NUM_PACKETS_TO_SEND 100
+#define DATA_ARRIVAL_INTERVAL 300
+#define NUM_PACKETS_TO_SEND 250
 
 static int sentCounter = 0;
 static int attemptedCounter = 0;
@@ -70,7 +70,9 @@ static void
 broadcast_sent(struct broadcast_conn *bc, int status, int num_tx)
 {
   //printf("message sent\n");
-  sentCounter++;
+  if (status == MAC_TX_OK) {
+    sentCounter++;
+  }
   /*if (sentCounter % 8 == 0) {
     printf("Reliability stats: %d attempted, %d sent\n", attemptedCounter, sentCounter);
   }*/
