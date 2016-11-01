@@ -1,6 +1,6 @@
 #!/bin/bash
 
-REMOTE_DIRECTORY="dai20160915"
+REMOTE_DIRECTORY="dai20160928"
 AUX_DIRECTORY="/home/mlwymore/blademac"
 CONTIKI_DIRECTORY="/home/mlwymore/contiki"
 COOJA_JAR_PATH="$CONTIKI_DIRECTORY/tools/cooja/dist/cooja.jar"
@@ -17,12 +17,15 @@ PROJ_CONF_CPCCMAC_SINK="$AUX_DIRECTORY/cpccmac-sink-project-conf.h"
 PROJ_CONF_BLADEMAC_SOURCE="$AUX_DIRECTORY/blademac-source-project-conf.h"
 PROJ_CONF_CCMAC_SOURCE="$AUX_DIRECTORY/ccmac-source-project-conf.h"
 PROJ_CONF_CPCCMAC_SOURCE="$AUX_DIRECTORY/cpccmac-source-project-conf.h"
+BLADEMAC_FILE_PATH="$CONTIKI_DIRECTORY/core/net/mac/ccmac/blademac.c"
 
 if [ ! -d "$RESULTS_DIRECTORY" ]; then
 	mkdir -p $RESULTS_DIRECTORY
 fi
 
 rm $RESULTS_DIRECTORY/*.txt
+
+sed -i 's/\#define TRACE_ON.*/\#define TRACE_ON 0/' $BLADEMAC_FILE_PATH
 
 NUMRUNS=20
 
@@ -47,7 +50,8 @@ sed -i 's/positions\.dat.*<\/positions>/positions.dat_'$RPM'<\/positions>/' $BLA
 sed -i 's/positions\.dat.*<\/positions>/positions.dat_'$RPM'<\/positions>/' $CCMAC_CSC
 sed -i 's/positions\.dat.*<\/positions>/positions.dat_'$RPM'<\/positions>/' $CPCCMAC_CSC
 
-DAIS=(1 5 25 50 100 200)
+DAIS=(175 225 250 275 300)
+#DAIS=(1 5 25 50 75 100 125 150)
 for DAI in "${DAIS[@]}"; do
 	sed -i 's/\#define DATA_ARRIVAL_INTERVAL.*/\#define DATA_ARRIVAL_INTERVAL '$DAI'/' $APP_FILE_PATH
 	sed -i '0,/<id>/{s/<id>.*/<id>'$DAI'<\/id>/}' $BLADEMAC_CSC

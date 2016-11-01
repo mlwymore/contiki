@@ -18,12 +18,15 @@ PROJ_CONF_CPCCMAC_SINK="$AUX_DIRECTORY/cpccmac-sink-project-conf.h"
 PROJ_CONF_BLADEMAC_SOURCE="$AUX_DIRECTORY/blademac-source-project-conf.h"
 PROJ_CONF_CCMAC_SOURCE="$AUX_DIRECTORY/ccmac-source-project-conf.h"
 PROJ_CONF_CPCCMAC_SOURCE="$AUX_DIRECTORY/cpccmac-source-project-conf.h"
+BLADEMAC_FILE_PATH="$CONTIKI_DIRECTORY/core/net/mac/ccmac/blademac.c"
 
 if [ ! -d "$RESULTS_DIRECTORY" ]; then
 	mkdir -p $RESULTS_DIRECTORY
 fi
 
 rm $RESULTS_DIRECTORY/*.txt
+
+sed -i 's/\#define TRACE_ON.*/\#define TRACE_ON 0/' $BLADEMAC_FILE_PATH
 
 NUMRUNS=4
 

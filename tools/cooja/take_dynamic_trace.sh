@@ -26,9 +26,9 @@ fi
 
 rm $RESULTS_DIRECTORY/*.txt
 
-sed -i 's/\#define TRACE_ON.*/\#define TRACE_ON 0/' $BLADEMAC_FILE_PATH
+sed -i 's/\#define TRACE_ON.*/\#define TRACE_ON 1/' $BLADEMAC_FILE_PATH
 
-NUMRUNS=20
+NUMRUNS=3
 
 NUMPACKETS=250
 
