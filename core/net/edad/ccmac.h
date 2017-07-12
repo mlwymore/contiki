@@ -32,17 +32,25 @@
 
 /**
  * \file
- *         Creates and parses the CC-MAC header, adapted from contikimac-framer.h
+ *         Header file for the CC-MAC radio duty cycling protocol, adapted from contikimac.h
  * \author
- *   Mat Wymore <mlwymore@gmail.com>      
- *   Konrad Krentz <konrad.krentz@gmail.com>
+ *         Mat Wymore <mlwymore@gmail.com>
+ *         Adam Dunkels <adam@sics.se>
  */
 
-#ifndef CCMAC_FRAMER_H_
-#define CCMAC_FRAMER_H_
+#ifndef CCMAC_H
+#define CCMAC_H
 
-#include "net/mac/framer.h"
+#include "sys/rtimer.h"
+#include "net/mac/rdc.h"
+#include "dev/radio.h"
+#include "net/rime/rime.h"
+#include "net/linkaddr.h"
 
-extern const struct framer ccmac_framer;
+typedef struct ccmac_beacon_payload {
+  clock_time_t beacon_interval;
+} ccmac_beacon_payload_t;
 
-#endif /* CCMAC_FRAMER_H_ */
+extern const struct rdc_driver ccmac_driver;
+
+#endif /* CCMAC_H */

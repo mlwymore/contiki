@@ -44,6 +44,11 @@
 #define LIMITED_DEBUG 0
 #define TRACE_ON 1
 
+#define SIMULATE_SENSITIVITY_THRESHOLD 1
+#if SIMULATE_SENSITIVITY_THRESHOLD
+#define SENSITIVITY_THRESHOLD -96
+#endif
+
 #include "sys/clock.h"
 
 #define LEDS 0
@@ -152,7 +157,7 @@ LIST(delay_info_list);
 #define RTIMER_WAKEUP_BUFFER_TIME RTIMER_SECOND / 250
 //#define CTIMER_WAKEUP_BUFFER_TIME CLOCK_SECOND / 128
 
-#define RTIMER_MAX_TICKS 65536
+#define RTIMER_MAX_TICKS 4294967296
 
 #if COMPOWER_ON
 static struct compower_activity current_packet_compower;
@@ -372,7 +377,7 @@ static void estimate_window() {
   /* Set Tsleep! */
   _Tsleep = (moving_avg / 2) * RTIMER_SECOND / CLOCK_SECOND;
   LIM_PRINTF("estimate_window: tsleep %u, tbeacon %u, %d\n", _Tsleep, _Tbeacon, list_length(window_estimate_list));
-  WINDOW("%lu %lu\n", (unsigned long)((struct window_estimate *)list_tail(window_estimate_list))->val, (unsigned long)_Tsleep);
+  WINDOW("%lu %lu %lu\n", (unsigned long)clock_time(), (unsigned long)((struct window_estimate *)list_tail(window_estimate_list))->val, (unsigned long)_Tsleep);
   /* Delete RSS samples */
   //clear_rss_samples();
 }
@@ -964,6 +969,10 @@ static void input(void) {
   struct rss_sample *sample;
 #if LOG_DELAY
   struct delay_info * dinfo;
+#endif
+
+#if SIMULATE_SENSITIVITY_THRESHOLD
+  if (packetbuf_attr(PACKETBUF_ATTR_RSSI) < SENSITIVITY_THRESHOLD) return;
 #endif
 
   clock_time_t now;

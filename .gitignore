@@ -30,6 +30,7 @@
 *.srf06-cc26xx
 *.ev-aducrf101mkxz
 *.report
+*.class
 summary
 *.summary
 *.runerr

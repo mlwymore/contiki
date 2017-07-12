@@ -1021,7 +1021,7 @@ static void input(void) {
       if (estimating_period && beacon_gap_seen) {
         period_estimate = now - last_known_rendezvous;
         LIM_PRINTF("input: estimated period of %d\n", (int)period_estimate);
-        PERIOD("%lu\n", period_estimate);
+        PERIOD("%lu %lu\n", (unsigned long)clock_time(), period_estimate);
         estimating_period = 0;
         beacon_gap_seen = 0;
         //last_known_rendezvous = now;
