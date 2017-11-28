@@ -10,6 +10,6 @@ include $(CONTIKI)/platform/z1/Makefile.z1sp
 endif
 
 MODULES += core/net \
-           core/net/mac core/net/mac/contikimac core/net/mac/ccmac \
+           core/net/mac core/net/mac/contikimac \
            core/net/llsec core/net/llsec/noncoresec \
            dev/cc2420

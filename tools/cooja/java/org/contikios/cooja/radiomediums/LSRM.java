@@ -64,19 +64,24 @@ import org.contikios.cooja.interfaces.Radio;
 public class LSRM extends AbstractRadioMedium {
   private static Logger logger = Logger.getLogger(LSRM.class);
 
-  public double PATH_LOSS_EXPONENT = 2.0;
+  public double PATH_LOSS_EXPONENT = 3.0;
   public long FREQUENCY_HZ = 2400000000L;
-  public double REFERENCE_DISTANCE = 1.0;
+  //public double REFERENCE_DISTANCE = 0.4064;
+  public double REFERENCE_DISTANCE = 0.315;
+  //public double REFERENCE_PATH_LOSS = 35;
   public double REFERENCE_PATH_LOSS = 0;
-  public double SIGMA = 0;
+  public double SIGMA = 2.5;
   public double NOISE_FLOOR = -100;
 
   private Random random = null;
 
   private MultiKeyMap<Radio, Double> pathLossMap;
 
+  private Simulation mySimulation;
+
   public LSRM(Simulation simulation) {
     super(simulation);
+    mySimulation = simulation;
     random = simulation.getRandomGenerator();
     pathLossMap = new MultiKeyMap<Radio, Double>();
 
@@ -184,18 +189,21 @@ public class LSRM extends AbstractRadioMedium {
     return 20*Math.log10(distance) + 20*Math.log10(FREQUENCY_HZ) - 147.55;
   }
 
-  public double distanceToPathLoss(double distance) {
-    return distanceToPathLoss(distance, SIGMA);
+  public double distanceToPathLoss(double distance, double angle) {
+    return distanceToPathLoss(distance, angle, SIGMA);
   }
 
-  public double distanceToPathLoss(double distance, double sigma) {
+  public double distanceToPathLoss(double distance, double angle, double sigma) {
     double refPL = REFERENCE_PATH_LOSS;
     if (refPL == 0) {
       refPL = freespacePathLoss(REFERENCE_DISTANCE);
     }
 
     double totalPL = refPL + 10*PATH_LOSS_EXPONENT*Math.log10(distance / REFERENCE_DISTANCE);
-    totalPL += random.nextGaussian() * sigma;
+    //double factor = (1 - Math.cos(angle - Math.PI / 2.0));
+    //System.out.println("" + refPL + " " + distance + " " + totalPL);
+    double factor = 1;
+    totalPL += factor * random.nextGaussian() * sigma;
     return totalPL;
   }
 
@@ -219,7 +227,7 @@ public class LSRM extends AbstractRadioMedium {
   public double getRxSuccessProbability(Radio source, Radio dest) {
     double distance = source.getPosition().getDistanceTo(dest.getPosition());
     double txPower = source.getCurrentOutputPower();
-    
+    //System.out.println(txPower);
     double rxPower = txPower - getPathLoss(source, dest);
     double noise = dest.getCurrentSignalStrength();
     double snr = rxPower - noise;
@@ -230,6 +238,15 @@ public class LSRM extends AbstractRadioMedium {
     return pathLossMap.get(sender, receiver);
   }
 
+  private double getAngle(Position sourcePosition, Position sinkPosition) {
+    //zOffset = sourcePosition.getZCoordinate() - sinkPosition.getZCoordinate();
+    double centerX = sinkPosition.getXCoordinate();
+    double centerY = sinkPosition.getYCoordinate() / 2.0;
+    double angle = Math.atan2((sourcePosition.getYCoordinate() - centerY), (sourcePosition.getXCoordinate() - centerX));
+    //System.out.println(angle);
+    return angle;
+  }
+
   private void updatePathLosses() {
     pathLossMap = new MultiKeyMap<Radio, Double>();
     for (Radio sender : getRegisteredRadios()) {
@@ -238,7 +255,8 @@ public class LSRM extends AbstractRadioMedium {
           continue;
         }
         double distance = sender.getPosition().getDistanceTo(recv.getPosition());
-        double pathLoss = distanceToPathLoss(distance);
+        double angle = getAngle(mySimulation.getMotes()[0].getInterfaces().getPosition(), mySimulation.getMotes()[1].getInterfaces().getPosition());
+        double pathLoss = distanceToPathLoss(distance, angle);
         pathLossMap.put(sender, recv, pathLoss);
       }
     }

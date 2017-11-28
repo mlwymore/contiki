@@ -41,7 +41,7 @@
 #define LOG_DELAY 1
 #define DEBUG 0
 #define LIMITED_DEBUG 0
-#define TRACE_ON 1
+#define TRACE_ON 0
 
 #include "sys/clock.h"
 
