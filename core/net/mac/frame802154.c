@@ -359,8 +359,18 @@ frame802154_hdrlen(frame802154_t *p)
 {
   field_length_t flen;
   field_len(p, &flen);
+#if __MSP430__
+  int len = 2 + flen.seqno_len + flen.dest_pid_len + flen.dest_addr_len +
+         flen.src_pid_len + flen.src_addr_len + flen.aux_sec_len;
+  if(len % 4) {
+    len = len + 4 - len % 4;
+  }
+  //printf("frame802154: hdrlen %d\n", len);
+  return len;
+#else
   return 2 + flen.seqno_len + flen.dest_pid_len + flen.dest_addr_len +
          flen.src_pid_len + flen.src_addr_len + flen.aux_sec_len;
+#endif
 }
 void
 frame802154_create_fcf(frame802154_fcf_t *fcf, uint8_t *buf)
@@ -462,6 +472,17 @@ frame802154_create(frame802154_t *p, uint8_t *buf)
   }
 #endif /* LLSEC802154_USES_AUX_HEADER */
 
+#if __MSP430__
+  if(pos % 4) {
+    int i;
+    for(i = 0; i < 4 - pos % 4; i++) {
+      buf[pos + i] = 0;
+    }
+    pos += 4 - pos % 4;
+  }
+  //printf("frame802154: pos %d\n", pos);
+#endif
+
   return (int)pos;
 }
 
@@ -547,6 +568,7 @@ frame802154_parse(uint8_t *data, int len, frame802154_t *pf)
       pf->dest_addr[0] = p[1];
       pf->dest_addr[1] = p[0];
       p += 2;
+      //printf("short\n");
     } else if(fcf.dest_addr_mode == FRAME802154_LONGADDRMODE) {
       for(c = 0; c < 8; c++) {
         pf->dest_addr[c] = p[7 - c];
@@ -624,6 +646,15 @@ frame802154_parse(uint8_t *data, int len, frame802154_t *pf)
   }
 #endif /* LLSEC802154_USES_AUX_HEADER */
 
+#if __MSP430__
+  c = p - data;
+  //printf("c1 %d\n", c);
+  if(c % 4) {
+    p += 4 - c % 4;
+  }
+  //printf("frame802154: p %d\n", p);
+#endif
+
   /* header length */
   c = p - data;
   /* payload length */
@@ -632,6 +663,8 @@ frame802154_parse(uint8_t *data, int len, frame802154_t *pf)
   pf->payload = p;
 
   /* return header length if successful */
+  //printf("c %d\n", c);
+  //printf("len %d\n", len);
   return c > len ? 0 : c;
 }
 /** \}   */
