@@ -43,13 +43,6 @@
 #include "sys/rtimer.h"
 #include "net/mac/rdc.h"
 #include "dev/radio.h"
-#include "net/rime/rime.h"
-#include "net/linkaddr.h"
-
-typedef struct rimac_beacon_payload {
-  clock_time_t backoff_window;
-  linkaddr_t dest_addr;
-} rimac_beacon_payload_t;
 
 extern const struct rdc_driver rimac_driver;
 

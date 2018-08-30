@@ -150,6 +150,9 @@ typedef struct {
   uint8_t ack_required;      /**< 1 bit. Is an ack frame required? */
   uint8_t panid_compression; /**< 1 bit. Is this a compressed header? */
   /*   uint8_t reserved; */  /**< 1 bit. Unused bit */
+#if RPL_CONF_OPP_ROUTING
+  uint8_t use_opp_routing;   /**< 1 bit. Takes place of reserved bit. */
+#endif
   uint8_t sequence_number_suppression; /**< 1 bit. Does the header omit sequence number?, see 802.15.4e */
   uint8_t ie_list_present;   /**< 1 bit. Does the header contain Information Elements?, see 802.15.4e */
   uint8_t dest_addr_mode;    /**< 2 bit. Destination address mode, see 802.15.4 */

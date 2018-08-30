@@ -244,11 +244,11 @@ tx_done(int status, struct rdc_buf_list *q, struct neighbor_queue *n)
     break;
   case MAC_TX_COLLISION:
   case MAC_TX_NOACK:
-    PRINTF("csma: drop with status %d after %d transmissions, %d collisions\n",
+    printf("csma: drop with status %d after %d transmissions, %d collisions\n",
                  status, n->transmissions, n->collisions);
     break;
   default:
-    PRINTF("csma: rexmit failed %d: %d\n", n->transmissions, status);
+    printf("csma: rexmit failed %d: %d\n", n->transmissions, status);
     break;
   }
 
@@ -440,10 +440,10 @@ send_packet(mac_callback_t sent, void *ptr)
             return;
           }
           memb_free(&metadata_memb, q->ptr);
-          PRINTF("csma: could not allocate queuebuf, dropping packet\n");
+          printf("csma: could not allocate queuebuf, dropping packet\n");
         }
         memb_free(&packet_memb, q);
-        PRINTF("csma: could not allocate queuebuf, dropping packet\n");
+        printf("csma: could not allocate queuebuf, dropping packet\n");
       }
       /* The packet allocation failed. Remove and free neighbor entry if empty. */
       if(list_length(n->queued_packet_list) == 0) {
@@ -451,9 +451,9 @@ send_packet(mac_callback_t sent, void *ptr)
         memb_free(&neighbor_memb, n);
       }
     } else {
-      PRINTF("csma: Neighbor queue full\n");
+      printf("csma: Neighbor queue full\n");
     }
-    PRINTF("csma: could not allocate packet, dropping packet\n");
+    printf("csma: could not allocate packet, dropping packet\n");
   } else {
     PRINTF("csma: could not allocate neighbor, dropping packet\n");
   }

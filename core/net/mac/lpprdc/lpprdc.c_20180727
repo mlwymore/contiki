@@ -78,6 +78,8 @@
 #endif /* RTIMER_ARCH_SECOND > 8000 */
 #endif /* CONTIKIMAC_CONF_CCA_SLEEP_TIME */
 
+#define CCA_SLEEP_TIME_LONG                 RTIMER_ARCH_SECOND / 300
+
 
 #define NETSTACK_RDC_CHANNEL_CHECK_RANDOMNESS_FRACTION 2
 
@@ -91,8 +93,11 @@
 #define AFTER_ACK_DETECTED_WAIT_TIME      RTIMER_ARCH_SECOND / 1500
 #endif
 
-#define AFTER_PROBE_SENT_WAIT_TIME        RTIMER_ARCH_SECOND / 1000
-//#define AFTER_PROBE_SENT_WAIT_TIME        RTIMER_ARCH_SECOND / 500
+#define AFTER_PROBE_SENT_WAIT_TIME        RTIMER_ARCH_SECOND / 500
+
+#define PROBE_RECEIVE_DURATION            RTIMER_ARCH_SECOND / 900
+#define ACK_RECEIVE_DURATION              RTIMER_ARCH_SECOND / 512
+#define PACKET_RECEIVE_DURATION           RTIMER_ARCH_SECOND / 250
 
 #define INTER_PACKET_INTERVAL             RTIMER_ARCH_SECOND / 1100
 #define PROBE_TRAIN_PERIOD                RTIMER_ARCH_SECOND / 400
@@ -100,13 +105,14 @@
 #define PROBE_CHANNEL_CHECK_TIME          PROBE_TRAIN_PERIOD
 #define DATA_CHANNEL_CHECK_TIME           PROBE_CHANNEL_CHECK_TIME
 
+#define PROBE_RESPONSE_CHECK_INTERVAL     RTIMER_ARCH_SECOND / 4000
+
 #define INITIAL_NUM_PROBES                    2
 
 #define MIN_BACKOFF_WINDOW 2
-#define MAX_BACKOFF_WINDOW 32
+#define MAX_BACKOFF_WINDOW 16
 
 #define CTIMER_TIMEOUT 2
-#define ACK_LISTEN_TIMEOUT (RTIMER_ARCH_SECOND / 1300)
 
 #include <stdio.h>
 static struct rtimer rt;
@@ -135,6 +141,7 @@ static void *curr_ptr;
 static volatile uint8_t contikimac_is_on = 0;
 static volatile uint8_t contikimac_keep_radio_on = 0;
 
+static volatile unsigned char packetbuf_is_locked = 0;
 static volatile unsigned char we_are_sending = 0;
 static volatile unsigned char we_are_broadcasting = 0;
 static volatile unsigned char we_are_probing = 0;
@@ -153,45 +160,10 @@ static volatile uint16_t ctimer_max_probe_interval = 0;
 static volatile uint16_t listen_for_probe_timeout = 0;
 static volatile rtimer_clock_t current_backoff_window = 0;
 
-static volatile uint8_t num_probes_remaining = 0;
-
-#define DEST_ADDR_OFFSET (2 + 3)
-#if NETSTACK_CONF_WITH_IPV6
 #define ACKBUF_SIZE 23
 #define PROBEBUF_SIZE 17
-#define SENDER_ADDR_LEN 8
-#define DEST_ADDR_LEN 8
-#define BCAST_DEST_ADDR_LEN 2
-#else
-#define ACKBUF_SIZE 11
-#define PROBEBUF_SIZE 11
-#define SENDER_ADDR_LEN 2
-#define DEST_ADDR_LEN 2
-#define BCAST_DEST_ADDR_LEN 2
-#endif
-#define PROBE_ID_POSITION (DEST_ADDR_OFFSET + BCAST_DEST_ADDR_LEN + SENDER_ADDR_LEN)
-#define ACK_ID_POSITION (DEST_ADDR_OFFSET + DEST_ADDR_LEN + SENDER_ADDR_LEN)
-
-#ifdef LPPRDC_CONF_INITIAL_PROBE_SIZE
-#define INITPROBEBUF_SIZE LPPRDC_CONF_INITIAL_PROBE_SIZE
-#else
-#define INITPROBEBUF_SIZE 125
-#endif
-
-#define CCA_SLEEP_TIME_LONG                 (RTIMER_ARCH_SECOND / 275 * INITPROBEBUF_SIZE / 125)
-
-#define PROBE_RECEIVE_DURATION            ((uint32_t)PROBEBUF_SIZE * RTIMER_ARCH_SECOND * 8 / 250000)
-#define ACK_RECEIVE_DURATION              ((uint32_t)ACKBUF_SIZE * RTIMER_ARCH_SECOND * 8 / 250000)
-#define PACKET_RECEIVE_DURATION           RTIMER_ARCH_SECOND / 250
-/*#define PROBE_RECEIVE_DURATION            RTIMER_ARCH_SECOND / 900
-#define ACK_RECEIVE_DURATION              RTIMER_ARCH_SECOND / 512
-#define PACKET_RECEIVE_DURATION           RTIMER_ARCH_SECOND / 250*/
-
-#ifdef LPPRDC_CONF_RESET_BACKOFF_ON_PROBE
-#define LPPRDC_RESET_BACKOFF_ON_PROBE LPPRDC_CONF_RESET_BACKOFF_ON_PROBE
-#else
-#define LPPRDC_RESET_BACKOFF_ON_PROBE 0
-#endif
+#define INITPROBEBUF_SIZE 127
+#define INITPROBE_TARGET_SIZE 127
 
 static int transmit_len = 0;
 static uint8_t sendbuf[PACKETBUF_SIZE];
@@ -209,11 +181,11 @@ struct probe_packet {
 };
 struct initprobe_packet {
   uint8_t probe_id;
-  uint8_t filler[INITPROBEBUF_SIZE - PROBEBUF_SIZE];
+  uint8_t filler[INITPROBE_TARGET_SIZE - PROBEBUF_SIZE];
 };
 
 
-#define DEBUG 0
+#define DEBUG 1
 #if DEBUG
 #include <stdio.h>
 #define PRINTF(...) printf(__VA_ARGS__)
@@ -250,6 +222,8 @@ off(void)
   }
 }
 /*---------------------------------------------------------------------------*/
+static void process_input_queue(void);
+/*---------------------------------------------------------------------------*/
 static void
 powercycle_turn_radio_off(void)
 {
@@ -264,7 +238,7 @@ powercycle_turn_radio_off(void)
     off();
 #if CONTIKIMAC_CONF_COMPOWER
     radio_value_t radio_is_on;
-    NETSTACK_RADIO.get_value(RADIO_PARAM_POWER_MODE, &radio_is_on);
+    NETSTACK_RADIO.get_value(RADIO_PARAM_POWER_MODE, &was_on);
     if(was_on && !radio_is_on) {
       compower_accumulate(&compower_idle_activity);
     }
@@ -278,7 +252,7 @@ powercycle_turn_radio_off(void)
 static void
 powercycle_turn_radio_on(void)
 {
-  if(we_are_sending == 0) {
+  if(packetbuf_is_locked == 0 && we_are_sending == 0) {
     on();
   }
 }
@@ -312,6 +286,12 @@ channel_is_clear(rtimer_clock_t time_clear, int with_restart)
 }
 /*---------------------------------------------------------------------------*/
 static void
+powercycle_bare_wrapper(struct rtimer *t, void *ptr)
+{
+  process_poll(&lpprdc_probe_process);
+}
+/*---------------------------------------------------------------------------*/
+static void
 powercycle_ctimer_wrapper(void *ptr)
 {
   process_post(&lpprdc_probe_process, PROCESS_EVENT_CONTINUE, NULL);
@@ -324,10 +304,14 @@ PROCESS_THREAD(lpprdc_probe_process, ev, data)
 {
   PROCESS_BEGIN();
 
+  static volatile uint8_t num_probes_remaining = 0;
   static rtimer_clock_t wt = 0;
   static uint8_t send_probe = 0;
   static uint8_t send_initprobe = 0;
+  static uint8_t channel_was_clear = 0;
   static rtimer_clock_t extra_wait = 0;
+  static rtimer_clock_t sleep_time = 0;
+  static rtimer_clock_t pending_time = 0;
 
   PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_CONTINUE);
 
@@ -343,7 +327,7 @@ PROCESS_THREAD(lpprdc_probe_process, ev, data)
         num_probes_remaining = INITIAL_NUM_PROBES; //2
         while(num_probes_remaining-- > 0) {
           if(send_probe && num_probes_remaining > -1) {
-            probebuf[PROBE_ID_POSITION] = num_probes_remaining + 1;
+            probebuf[16] = num_probes_remaining + 1;
             if((send_initprobe && NETSTACK_RADIO.prepare(initprobebuf, INITPROBEBUF_SIZE)) || 
                 (!send_initprobe && NETSTACK_RADIO.prepare(probebuf, PROBEBUF_SIZE))) {
               we_are_probing = 0;
@@ -361,43 +345,71 @@ PROCESS_THREAD(lpprdc_probe_process, ev, data)
           } else if(num_probes_remaining < 0) {
             break;
           }
-          if(send_initprobe) {
-          	send_initprobe = 0;
-          	continue;
-          }
+          send_initprobe = 0;
           /* Probe was sent - wait for softack_input_callback and listen for collision */
           activity_seen = 0;
           waiting_for_response = 1;
           /* Need to wait a little extra time if we didn't just send a probe (i.e. the send was handled by softack code) */
           extra_wait = send_probe == 1 ? 0 : ACK_RECEIVE_DURATION;
           uint8_t channel_clear = 0;
+          channel_was_clear = 0;
           receiving_packet = 0;
+          pending_time = 0;
+          sleep_time = PROBE_RESPONSE_CHECK_INTERVAL + extra_wait;
           wt = RTIMER_NOW();
           
           while(we_are_probing && waiting_for_response && RTIMER_CLOCK_LT(RTIMER_NOW(), 
                     wt + INTER_PACKET_INTERVAL + PACKET_RECEIVE_DURATION + extra_wait)) {
-            if(RTIMER_CLOCK_DIFF(RTIMER_NOW(), wt) > AFTER_PROBE_SENT_WAIT_TIME + extra_wait) {
-          		channel_clear = NETSTACK_RADIO.channel_clear();
-          		activity_seen = channel_clear ? activity_seen : 1;
-          		if(channel_clear) {
-          			break;
-          		}
-        		}
-    			}
+            if(!NETSTACK_RADIO.receiving_packet() && !NETSTACK_RADIO.pending_packet()) {
+              channel_was_clear = 1;
+              if(receiving_packet) {
+                /* We're probably receiving a probe, meaning we're probably stepping on someone's toes */
+                we_are_probing = 0;
+                PRINTF("r\n");
+                break;
+              }
+              if(RTIMER_CLOCK_DIFF(RTIMER_NOW(), wt) > AFTER_PROBE_SENT_WAIT_TIME + extra_wait) {
+                channel_clear = NETSTACK_RADIO.channel_clear();
+                activity_seen = channel_clear ? activity_seen : 1;
+                if(channel_clear) {
+                  break;
+                }
+              }
+            } else if(channel_was_clear) {
+              activity_seen = 1;
+              receiving_packet = 1;
+            }
+            
+            if(NETSTACK_RADIO.pending_packet()) {
+              if(pending_time && RTIMER_CLOCK_DIFF(RTIMER_NOW(), pending_time) > AFTER_ACK_DETECTED_WAIT_TIME) {
+              	printf("lpprdc: read\n");
+                //NETSTACK_RADIO.read(NULL, 0);
+                break;
+              }
+              if(!pending_time) {
+                pending_time = RTIMER_NOW();
+              }
+            }
+            
+            rtimer_init();
+            rtimer_set(&rt, RTIMER_NOW() + sleep_time, 1,
+                         powercycle_bare_wrapper, NULL);
+            sleep_time = PROBE_RESPONSE_CHECK_INTERVAL;
+            PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_POLL);
+            rtimer_unset();
+          }
 
           if(we_are_probing && !waiting_for_response) {
             /* we sent an ack */
             send_probe = 0;
-#if LPPRDC_RESET_BACKOFF_ON_ACK
             if(current_backoff_window > 0) {
               num_probes_remaining = 1;
               current_backoff_window = 1;
             } else {
               num_probes_remaining = 0;
-              //wt = RTIMER_NOW();
-              //while(RTIMER_CLOCK_LT(RTIMER_NOW(), wt + ACK_RECEIVE_DURATION)) { }
+              wt = RTIMER_NOW();
+              while(RTIMER_CLOCK_LT(RTIMER_NOW(), wt + ACK_RECEIVE_DURATION)) { }
             }
-#endif
           } else if(we_are_probing && activity_seen) {
             /* collision detected - if probes remaining, wait for the channel to clear */
             if(current_backoff_window < MAX_BACKOFF_WINDOW) {
@@ -421,6 +433,9 @@ PROCESS_THREAD(lpprdc_probe_process, ev, data)
         }
       }
       powercycle_turn_radio_off();
+      if(msg_index) {
+      	process_input_queue();
+			}
     }
     current_backoff_window = 0;
     we_are_probing = 0;
@@ -506,7 +521,7 @@ PROCESS_THREAD(lpprdc_cca_train_process, ev, data)
     if(!NETSTACK_RADIO.channel_clear()) {
         on();
         etimer_set(&et, 2);
-        //PRINTF("a\n");
+        PRINTF("a\n");
         PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&et) || ev == PROCESS_EVENT_EXIT || ev == PROCESS_EVENT_CONTINUE);
         if(ev == PROCESS_EVENT_EXIT) {
           etimer_stop(&et);
@@ -516,7 +531,7 @@ PROCESS_THREAD(lpprdc_cca_train_process, ev, data)
           off();
           continue;
         }
-        //PRINTF("b\n");
+        PRINTF("b\n");
         off();
     } else {
     
@@ -576,11 +591,11 @@ PROCESS_THREAD(lpprdc_send_process, ev, data)
         packet_pushed++;
 
         broadcast_start_time = clock_time();
-        printf("lpprdc: send broadcast\n");
+        PRINTF("lpprdc: send broadcast\n");
 
         if(broadcast_rate_drop()) {
           mac_call_sent_callback(curr_callback, curr_ptr, MAC_TX_COLLISION, 1);
-          break;
+          continue;
         }
       } else {
 #if NETSTACK_CONF_WITH_IPV6
@@ -697,14 +712,11 @@ PROCESS_THREAD(lpprdc_send_process, ev, data)
       }
 
       if(ret == RADIO_TX_OK) {
-        //ctimer_set(&ct, CTIMER_TIMEOUT, listening_off, NULL);
+        ctimer_set(&ct, CTIMER_TIMEOUT, listening_off, NULL);
         /* Wait for the ACK probe packet */
-        static rtimer_clock_t wt;
         packet_was_acked = 0;
-        wt = RTIMER_NOW();
-        while(RTIMER_CLOCK_LT(RTIMER_NOW(), wt + ACK_LISTEN_TIMEOUT)) { }
-        //PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_POLL);
-        //ctimer_stop(&ct);
+        PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_POLL);
+        ctimer_stop(&ct);
         if(packet_was_acked) {
           packet_pushed++;
           retry = 0;
@@ -776,7 +788,9 @@ PROCESS_THREAD(lpprdc_send_process, ev, data)
       break;
     }
   } while(1);
-
+  if(msg_index) {
+  	process_input_queue();
+ 	}
   is_receiver_awake = 0;
   we_are_sending = 0;
   retry = 0;
@@ -794,6 +808,7 @@ qsend_list(mac_callback_t sent, void *ptr, struct rdc_buf_list *buf_list)
     return;
   }
 
+  /* Do not send during reception of a burst */
   if(we_are_sending || we_are_probing) {
     PRINTF("failed qsend\n");
     /* Prepare the packetbuf for callback */
@@ -810,24 +825,24 @@ qsend_list(mac_callback_t sent, void *ptr, struct rdc_buf_list *buf_list)
     queuebuf_to_packetbuf(curr->buf);
 
     /* create and secure this frame */
-    if(!packetbuf_attr(PACKETBUF_ATTR_IS_CREATED_AND_SECURED)) {
-		  if(next != NULL) {
-		    packetbuf_set_attr(PACKETBUF_ATTR_PENDING, 1);
-		  }
-	#if !NETSTACK_CONF_BRIDGE_MODE
-		  /* If NETSTACK_CONF_BRIDGE_MODE is set, assume PACKETBUF_ADDR_SENDER is already set. */
-		  packetbuf_set_addr(PACKETBUF_ADDR_SENDER, &linkaddr_node_addr);
-	#endif
+    if(next != NULL) {
+      packetbuf_set_attr(PACKETBUF_ATTR_PENDING, 1);
+    }
+#if !NETSTACK_CONF_BRIDGE_MODE
+    /* If NETSTACK_CONF_BRIDGE_MODE is set, assume PACKETBUF_ADDR_SENDER is already set. */
+    packetbuf_set_addr(PACKETBUF_ADDR_SENDER, &linkaddr_node_addr);
+#endif
 
-		  if(NETSTACK_FRAMER.create() < 0) {
-		    PRINTF("lpprdc: framer failed\n");
-		    mac_call_sent_callback(sent, ptr, MAC_TX_ERR_FATAL, 1);
-		    return;
-		  }
+    packetbuf_set_attr(PACKETBUF_ATTR_MAC_ACK, 1);
 
-		  packetbuf_set_attr(PACKETBUF_ATTR_IS_CREATED_AND_SECURED, 1);
-		  queuebuf_update_from_packetbuf(curr->buf);
-	  }
+    if(NETSTACK_FRAMER.create() < 0) {
+      PRINTF("lpprdc: framer failed\n");
+      mac_call_sent_callback(sent, ptr, MAC_TX_ERR_FATAL, 1);
+      return;
+    }
+
+    packetbuf_set_attr(PACKETBUF_ATTR_IS_CREATED_AND_SECURED, 1);
+    queuebuf_update_from_packetbuf(curr->buf);
 
     curr = next;
   } while(next != NULL);
@@ -849,6 +864,31 @@ qsend_packet(mac_callback_t sent, void *ptr)
   list.buf = queuebuf_new_from_packetbuf();
   list.ptr = NULL;
   qsend_list(sent, ptr, &list);
+}
+/*---------------------------------------------------------------------------*/
+static void process_input_queue(void)
+{
+  while(msg_index > 0) {
+    PRINTF("msg %d\n", msg_index);
+    packetbuf_is_locked = 1;
+    queuebuf_to_packetbuf(msg_array[--msg_index]);
+    queuebuf_free(msg_array[msg_index]);
+#if RDC_WITH_DUPLICATE_DETECTION
+    /* Check for duplicate packet. */
+    uint8_t duplicate = mac_sequence_is_duplicate();
+    if(duplicate) {
+      /* Drop the packet. */
+      packetbuf_is_locked = 0;
+      PRINTF("dupe\n");
+      continue;
+    } else {
+      mac_sequence_register_seqno();
+    }
+#endif /* RDC_WITH_DUPLICATE_DETECTION */
+    NETSTACK_MAC.input();
+    PRINTF("msg done\n");
+    packetbuf_is_locked = 0;
+  }
 }
 /*---------------------------------------------------------------------------*/
 static void
@@ -895,21 +935,22 @@ input_packet(void)
       compower_clear(&current_packet);
 #endif /* CONTIKIMAC_CONF_COMPOWER */
 
-  		PRINTF("in\n");
-#if RDC_WITH_DUPLICATE_DETECTION
-		  /* Check for duplicate packet. */
-		  uint8_t duplicate = mac_sequence_is_duplicate();
-		  if(duplicate) {
-		    /* Drop the packet. */
-		    PRINTF("dupe\n");
-		  } else {
-		    mac_sequence_register_seqno();
-		  	NETSTACK_MAC.input();
-		  }
-#else
-			NETSTACK_MAC.input();
-#endif /* RDC_WITH_DUPLICATE_DETECTION */
 
+
+      if(msg_index >= INPUT_QUEUE_SIZE) {
+        PRINTF("lpprdc: Input message queue full, message dropped.\n");
+      } else if(we_are_probing || !we_are_sending || !is_broadcast) {
+        struct queuebuf *msg;
+        msg = queuebuf_new_from_packetbuf();
+        if(msg != NULL) {
+        	msg_array[msg_index++] = msg;
+        } else {
+        	PRINTF("lpprdc: unable to allocate queuebuf\n");
+        }
+      }
+      if(!we_are_probing && !we_are_sending && msg_index) {
+        process_input_queue();
+      }
       return;
     } else {
       //PRINTDEBUG("lpprdc: data not for us\n");
@@ -919,23 +960,16 @@ input_packet(void)
   }
 }
 /*---------------------------------------------------------------------------*/
-#define DATA_PACKET_TYPE 1
-#define PROBE_PACKET_TYPE 6
-#define ACK_PACKET_TYPE 7
-
-#define FCF_POSITION 0
-#define SEQNO_POSITION 2
-/*---------------------------------------------------------------------------*/
 /* The frame was not acked because it was invalid. */
 static void
 softack_invalid_frame_callback(const uint8_t *frame, uint8_t framelen)
 {
-  uint8_t fcf = frame[FCF_POSITION];
+  uint8_t fcf = frame[0];
   PRINTF("lpprdc: invalid frame callback\n");
-  if((fcf & 7) == DATA_PACKET_TYPE) {
+  if((fcf & 7) == 1) {
     /* Data packet was invalid */
     if(we_are_probing) {
-      //process_post(&lpprdc_probe_process, PROCESS_EVENT_POLL, NULL);
+      process_post(&lpprdc_probe_process, PROCESS_EVENT_POLL, NULL);
     }
   }
 }
@@ -946,28 +980,27 @@ softack_invalid_frame_callback(const uint8_t *frame, uint8_t framelen)
 static void
 softack_acked_callback(const uint8_t *frame, uint8_t framelen)
 {
-  uint8_t fcf;
+  uint8_t fcf, ack_required, seqno;
 
-  fcf = frame[FCF_POSITION];
+  fcf = frame[0];
+  ack_required = (fcf >> 5) & 1;
+  seqno = frame[2];
 
-  if((fcf & 7) == DATA_PACKET_TYPE) {
+  if((fcf & 7) == 1) {
     /* Data packet */
     /* We just acked a data packet. If we're probing, we should continue probing.
        If we heard the packet while sending, we shouldn't do anything. */
     if(we_are_probing) {
-    	if(current_backoff_window == 0) {
-    		off();
-    	}
       waiting_for_response = 0;
-      //process_post(&lpprdc_probe_process, PROCESS_EVENT_POLL, NULL);
+      process_post(&lpprdc_probe_process, PROCESS_EVENT_POLL, NULL);
     }
-  } else if ((fcf & 7) == PROBE_PACKET_TYPE) {
+  } else if ((fcf & 7) == 6) {
     /* Broadcast probe */
     /* We just sent a data packet as a response to a probe. We're expecting an
        ack (if unicast), but there's nothing to do until it arrives. */
     packet_was_sent = 1;
     process_exit(&lpprdc_cca_train_process);
-  } else if ((fcf & 7) == ACK_PACKET_TYPE) {
+  } else if ((fcf & 7) == 7) {
     /* Ack probe */
     /* This occurs if we had data to send and the ack wasn't to us */
     packet_was_sent = 1;
@@ -991,7 +1024,7 @@ probe_timeout(void *ptr)
 static uint8_t
 softack_input_callback(const uint8_t *frame, uint8_t framelen, uint8_t **ackbufptr, uint8_t *acklen)
 {
-  uint8_t fcf, fcf2, dest_addr_mode, seqno, dest_addr_len;
+  uint8_t fcf, fcf2, ack_required, dest_addr_mode, seqno, dest_addr_len;
 
   int i;
   
@@ -999,54 +1032,50 @@ softack_input_callback(const uint8_t *frame, uint8_t framelen, uint8_t **ackbufp
   
   rtimer_unset();
 
-  fcf = frame[FCF_POSITION];
-  fcf2 = frame[FCF_POSITION + 1];
+  fcf = frame[0];
+  fcf2 = frame[1];
+  ack_required = (fcf >> 5) & 1;
   dest_addr_mode = (fcf2 >> 2) & 3;
-  seqno = frame[SEQNO_POSITION];
+  seqno = frame[2];
 
   dest_addr_len = dest_addr_mode == FRAME802154_SHORTADDRMODE ? 2:8;
 
   activity_seen = 1;
 
-  if((fcf & 7) == DATA_PACKET_TYPE) {
+  if((fcf & 7) == 1) {
     receiving_packet = 0;
     /* Data packet */
-  	//PRINTF("p\n");
-    uint8_t *dest_addr = frame + DEST_ADDR_OFFSET;
-    uint8_t dest_addr_big_endian[dest_addr_len];
-    for(i = 0; i < dest_addr_len; i++) {
-      dest_addr_big_endian[i] = dest_addr[dest_addr_len - 1 - i];
-    }
-    //TODO: cheating and deciding it's a broadcast if short addr mode is used for dest
-    if(linkaddr_cmp(dest_addr_big_endian, &linkaddr_node_addr) || (dest_addr_len == 2 && we_are_probing)) {
-      /* The data packet was unicast to us. Respond with ack probe. */
-      uint8_t *sender_addr = frame + DEST_ADDR_OFFSET + dest_addr_len; /* 2 for short addr mode */
-      uint8_t sender_addr_big_endian[SENDER_ADDR_LEN];
-      for(i = 0; i < SENDER_ADDR_LEN; i++) {
-        sender_addr_big_endian[i] = sender_addr[SENDER_ADDR_LEN - 1 - i];
+    if(ack_required) {
+    	//PRINTF("p\n");
+      uint8_t *dest_addr = frame + 2 + 3;
+      uint8_t dest_addr_big_endian[dest_addr_len];
+      for(i = 0; i < dest_addr_len; i++) {
+        dest_addr_big_endian[i] = dest_addr[dest_addr_len - 1 - i];
       }
-      ackbuf[SEQNO_POSITION] = seqno;
-      memcpy(ackbuf + DEST_ADDR_OFFSET, sender_addr, SENDER_ADDR_LEN);
-      if(we_are_probing && current_backoff_window > 0) {
-#if LPPRDC_RESET_BACKOFF_ON_ACK
-        ackbuf[ACK_ID_POSITION] = 1;
-#else
-				ackbuf[ACK_ID_POSITION] = num_probes_remaining;
-#endif
-      } else {
-        ackbuf[ACK_ID_POSITION] = 0;
-      }
+      //TODO: cheating and deciding it's a broadcast if short addr mode is used for dest
+      if(linkaddr_cmp(dest_addr_big_endian, &linkaddr_node_addr) || (dest_addr_len == 2 && we_are_probing)) {
+        /* The data packet was unicast to us. Respond with ack probe. */
+                	PRINTF("q\n");
+        uint8_t *sender_addr = frame + 2 + 3 + dest_addr_len; /* 2 for short addr mode */
+        uint8_t sender_addr_big_endian[8];
+        for(i = 0; i < 8; i++) {
+          sender_addr_big_endian[i] = sender_addr[7 - i];
+        }
+        ackbuf[2] = seqno;
+        memcpy(ackbuf + 2 + 3, sender_addr, 8);
+        if(we_are_probing && current_backoff_window > 0) {
+          ackbuf[2 + 3 + 8 + 8 + 1] = 1;
+        } else {
+          ackbuf[2 + 3 + 8 + 8 + 1] = 0;
+        }
 
-      *ackbufptr = ackbuf;
-      *acklen = ACKBUF_SIZE;
-      return 1;
+        *ackbufptr = ackbuf;
+        *acklen = ACKBUF_SIZE;
+        return 1;
+      }
     }
-  } else if((fcf & 7) == PROBE_PACKET_TYPE) {
+  } else if((fcf & 7) == 6) {
     /* Broadcast probe */
-    if(framelen > PROBEBUF_SIZE) {
-    	*acklen = 0;
-    	return 0;
-    }
     if(we_are_probing) {
       *acklen = 0;
       return 0;
@@ -1057,17 +1086,14 @@ softack_input_callback(const uint8_t *frame, uint8_t framelen, uint8_t **ackbufp
     uint8_t they_are_probing = 0;
 
     uint8_t probe_id = 0;
-    if(framelen >= PROBE_ID_POSITION + 1) {
-      probe_id = frame[PROBE_ID_POSITION];
-      unsigned short rand = 0;
+    if(framelen >= 2 + 3 + 2 + 8 + 2) {
+      probe_id = frame[2 + 3 + 2 + 8 + 1];
       if(probe_id > prev_probe_id) {
-      	current_backoff_window = probe_id;
-      	rand = random_rand();
-        probe_for_sending = rand / (RANDOM_RAND_MAX / probe_id) + 1;
+        probe_for_sending = random_rand() % probe_id + 1;
       } else if (probe_id == 1) {
       	probe_for_sending = 1;
       }
-      //printf("%d %d %d %u\n", probe_id, prev_probe_id, probe_for_sending, rand);
+      PRINTF("%d %d %d\n", probe_id, prev_probe_id, probe_for_sending);
       prev_probe_id = probe_id;
     } else {
       PRINTF("lpprdc: couldn't get probe id\n");
@@ -1085,10 +1111,10 @@ softack_input_callback(const uint8_t *frame, uint8_t framelen, uint8_t **ackbufp
 
     /* If we're sending, send a packet as response (if we don't need to back off) */
     if(we_are_sending && they_are_probing) {
-      uint8_t *sender_addr = frame + DEST_ADDR_OFFSET + BCAST_DEST_ADDR_LEN;
-      uint8_t sender_addr_big_endian[SENDER_ADDR_LEN];
-      for(i = 0; i < SENDER_ADDR_LEN; i++) {
-        sender_addr_big_endian[i] = sender_addr[SENDER_ADDR_LEN - 1 - i];
+      uint8_t *sender_addr = frame + 2 + 3 + 2; /* 2 for short addr mode */
+      uint8_t sender_addr_big_endian[8];
+      for(i = 0; i < 8; i++) {
+        sender_addr_big_endian[i] = sender_addr[7 - i];
       }
       if(!we_are_broadcasting) {
 #if RPL_CONF_OPP_ROUTING
@@ -1097,12 +1123,11 @@ softack_input_callback(const uint8_t *frame, uint8_t framelen, uint8_t **ackbufp
 #else
         if(linkaddr_cmp(sender_addr_big_endian, &current_receiver_addr)) {
 #endif
-          memcpy(sendbuf + DEST_ADDR_OFFSET, sender_addr, SENDER_ADDR_LEN);
+          memcpy(sendbuf + 2 + 3, sender_addr, 8);
         } else {
           if(process_is_running(&lpprdc_cca_train_process)) {
             process_post(&lpprdc_cca_train_process, PROCESS_EVENT_CONTINUE, NULL);
           }
-          prev_probe_id = 0;
           *acklen = 0;
           return 0;
         }
@@ -1120,13 +1145,13 @@ softack_input_callback(const uint8_t *frame, uint8_t framelen, uint8_t **ackbufp
 
       *ackbufptr = sendbuf;
       *acklen = transmit_len;
-      return 0;
+      return 1;
     } else {
       if(process_is_running(&lpprdc_cca_train_process)) {
         process_post(&lpprdc_cca_train_process, PROCESS_EVENT_CONTINUE, NULL);
       }
     }
-  } else if ((fcf & 7) == ACK_PACKET_TYPE) {
+  } else if ((fcf & 7) == 7) {
     /* Ack probe */
     if(we_are_probing) {
       *acklen = 0;
@@ -1136,22 +1161,21 @@ softack_input_callback(const uint8_t *frame, uint8_t framelen, uint8_t **ackbufp
   	  ctimer_set(&ct, CTIMER_TIMEOUT, probe_timeout, NULL);
     }
     /* If we have data to send, we can. But if this ack was to us, it won't be ready. */
-    uint8_t *dest_addr = frame + DEST_ADDR_OFFSET;
-    uint8_t dest_addr_big_endian[DEST_ADDR_LEN];
+    uint8_t *dest_addr = frame + 2 + 3;
+    uint8_t dest_addr_big_endian[8];
     uint8_t they_are_probing;
-    for(i = 0; i < DEST_ADDR_LEN; i++) {
-      dest_addr_big_endian[i] = dest_addr[DEST_ADDR_LEN - 1 - i];
+    for(i = 0; i < 8; i++) {
+      dest_addr_big_endian[i] = dest_addr[7 - i];
     }
     uint8_t probe_id = 0;
-    if(framelen >= ACK_ID_POSITION + 1) {
-      probe_id = frame[ACK_ID_POSITION]; 
-#if LPPRDC_RESET_BACKOFF_ON_ACK
+    if(framelen >= 2 + 3 + 8 + 8 + 2) {
+      probe_id = frame[2 + 3 + 8 + 8 + 1]; 
+      /* Always reset backoff on an ack probe */
       if(probe_id > 0) {
         //probe_for_sending = random_rand() % probes_remaining + 1;
         probe_for_sending = probe_id;
       }
-#endif
-      PRINTF("%d %d %d\n", probe_id, prev_probe_id, probe_for_sending);
+            PRINTF("%d %d %d\n", probe_id, prev_probe_id, probe_for_sending);
       prev_probe_id = probe_id;
     } else {
       PRINTF("lpprdc: couldn't get probes remaining\n");
@@ -1161,10 +1185,10 @@ softack_input_callback(const uint8_t *frame, uint8_t framelen, uint8_t **ackbufp
     /* If this ack was to a pushed unicast packet, the node might not be probing */
     they_are_probing = probe_id > 0 ? 1 : 0;
 
-    uint8_t *sender_addr = frame + DEST_ADDR_OFFSET + SENDER_ADDR_LEN;
-    uint8_t sender_addr_big_endian[SENDER_ADDR_LEN];
-    for(i = 0; i < SENDER_ADDR_LEN; i++) {
-      sender_addr_big_endian[i] = sender_addr[SENDER_ADDR_LEN - 1 - i];
+    uint8_t *sender_addr = frame + 2 + 3 + 8;
+    uint8_t sender_addr_big_endian[8];
+    for(i = 0; i < 8; i++) {
+      sender_addr_big_endian[i] = sender_addr[7 - i];
     }
     if(linkaddr_cmp(dest_addr_big_endian, &linkaddr_node_addr) && seqno == current_seqno) {
 			/* This ack was to us */
@@ -1185,21 +1209,15 @@ softack_input_callback(const uint8_t *frame, uint8_t framelen, uint8_t **ackbufp
         linkaddr_copy(&last_receiver_to_ack, sender_addr_big_endian);
       }
 
-#if LPPRDC_RESET_BACKOFF_ON_ACK
       if(they_are_probing) {
         current_backoff_window = 0;
       }
-#endif
 
       packet_was_acked = 1;
       if(!we_are_broadcasting) {
         process_post(&lpprdc_send_process, PROCESS_EVENT_POLL, NULL);
       }
-#if LPPRDC_RESET_BACKOFF_ON_ACK
     } else if(we_are_sending && they_are_probing) {
-#else
-		} else if(we_are_sending && they_are_probing && (probe_id == probe_for_sending || probe_id == 1)) {
-#endif
       /* If this wasn't an ack to us and we have data to send, we can do that */
       if(we_are_broadcasting) {
         if(linkaddr_cmp(sender_addr_big_endian, &last_receiver_to_ack)) {
@@ -1212,6 +1230,11 @@ softack_input_callback(const uint8_t *frame, uint8_t framelen, uint8_t **ackbufp
         is_receiver_awake = 1;
       } else {
       	/*Unicasting */
+        /*uint8_t *sender_addr = frame + 2 + 3 + 8;
+        uint8_t sender_addr_big_endian[8];
+        for(i = 0; i < 8; i++) {
+          sender_addr_big_endian[i] = sender_addr[7 - i];
+        }*/
 #if RPL_CONF_OPP_ROUTING
         if((we_are_anycasting && rpl_node_in_forwarder_set(sender_addr_big_endian)) ||
            (!we_are_anycasting && linkaddr_cmp(sender_addr_big_endian, &current_receiver_addr))) {
@@ -1219,10 +1242,8 @@ softack_input_callback(const uint8_t *frame, uint8_t framelen, uint8_t **ackbufp
         if(linkaddr_cmp(sender_addr_big_endian, &current_receiver_addr)) {
 #endif
 					/* Unicasting to the sender */
-#if LPPRDC_RESET_BACKOFF_ON_ACK
           current_backoff_window = 0;
-#endif
-          memcpy(sendbuf + DEST_ADDR_OFFSET, sender_addr, SENDER_ADDR_LEN);
+          memcpy(sendbuf + 2 + 3, sender_addr, 8);
         } else { 
           *acklen = 0;
           if(process_is_running(&lpprdc_cca_train_process)) {
@@ -1262,12 +1283,8 @@ init(void)
   struct initprobe_packet initprobe;
   initprobe.probe_id = 2;
   int i = 0;
-  for(i = 0; i < INITPROBEBUF_SIZE - PROBEBUF_SIZE; i++) {
-  	if(i % 5 == 4) {
-    	initprobe.filler[i] = 0x7A;
-  	} else {
-  	  initprobe.filler[i] = 0x00;	
-	  }
+  for(i = 0; i < INITPROBE_TARGET_SIZE - PROBEBUF_SIZE; i++) {
+    initprobe.filler[i] = 0;
   }
 
   packetbuf_copyfrom(&initprobe, sizeof(struct initprobe_packet));
@@ -1303,18 +1320,14 @@ init(void)
   if(NETSTACK_FRAMER.create() < 0) {
     PRINTDEBUG("lpprdc: Failed to create ack probe packet.\n");
   }
-  PRINTF("lpprdc: ack probe size %d %d", packetbuf_totlen(), ACK_RECEIVE_DURATION);
+  PRINTF("lpprdc: ack probe size %d", packetbuf_totlen());
   packetbuf_copyto(ackbuf);
 
   probe_rate = NETSTACK_RDC_CHANNEL_CHECK_RATE;
   probe_interval = CLOCK_SECOND / probe_rate;
   ctimer_max_probe_interval = probe_interval + probe_interval / NETSTACK_RDC_CHANNEL_CHECK_RANDOMNESS_FRACTION;
   max_probe_interval = RTIMER_ARCH_SECOND / CLOCK_SECOND * ctimer_max_probe_interval;
-#ifdef SLEEP_RANGE
-	listen_for_probe_timeout = SLEEP_RANGE;
-#else
   listen_for_probe_timeout = 3*ctimer_max_probe_interval;
-#endif
 
   process_start(&lpprdc_probe_process, NULL);
 
@@ -1337,7 +1350,6 @@ turn_on(void)
 static int
 turn_off(int keep_radio_on)
 {
-	ctimer_stop(&probe_timer);
   contikimac_is_on = 0;
   contikimac_keep_radio_on = keep_radio_on;
   if(keep_radio_on) {

@@ -41,6 +41,7 @@
 #include "net/llsec/llsec802154.h"
 #include "net/packetbuf.h"
 #include "lib/random.h"
+#include "net/netstack.h"
 #include <string.h>
 
 #define DEBUG 0
@@ -85,7 +86,7 @@ create_frame(int type, int do_create)
   params.fcf.frame_type = packetbuf_attr(PACKETBUF_ATTR_FRAME_TYPE);
   params.fcf.frame_pending = packetbuf_attr(PACKETBUF_ATTR_PENDING);
   if(packetbuf_holds_broadcast()) {
-    params.fcf.ack_required = 0;
+  	params.fcf.ack_required = 0;
     /* Suppress seqno on broadcast if supported (frame v2 or more) */
     params.fcf.sequence_number_suppression = FRAME802154_VERSION >= FRAME802154_IEEE802154E_2012;
   } else {
@@ -96,6 +97,10 @@ create_frame(int type, int do_create)
    * There is one exception, seemingly a typo in Table 2a: rows 2 and 3: when there is no
    * source nor destination address, we have dest PAN ID iff compression is *set*. */
   params.fcf.panid_compression = 0;
+
+#if RPL_CONF_OPP_ROUTING
+  params.fcf.use_opp_routing = packetbuf_attr(PACKETBUF_ATTR_USE_OPP_ROUTING);
+#endif
 
   /* Insert IEEE 802.15.4 version bits. */
   params.fcf.frame_version = FRAME802154_VERSION;
@@ -239,6 +244,10 @@ parse(void)
     }
 #if NETSTACK_CONF_WITH_RIME
     packetbuf_set_attr(PACKETBUF_ATTR_PACKET_ID, frame.seq);
+#endif
+
+#if RPL_CONF_OPP_ROUTING
+    packetbuf_set_attr(PACKETBUF_ATTR_USE_OPP_ROUTING, frame.fcf.use_opp_routing);
 #endif
 
 #if LLSEC802154_USES_AUX_HEADER

@@ -359,7 +359,7 @@ frame802154_hdrlen(frame802154_t *p)
 {
   field_length_t flen;
   field_len(p, &flen);
-#if __MSP430__
+/*#if __MSP430__
   int len = 2 + flen.seqno_len + flen.dest_pid_len + flen.dest_addr_len +
          flen.src_pid_len + flen.src_addr_len + flen.aux_sec_len;
   if(len % 4) {
@@ -367,10 +367,10 @@ frame802154_hdrlen(frame802154_t *p)
   }
   //printf("frame802154: hdrlen %d\n", len);
   return len;
-#else
+#else*/
   return 2 + flen.seqno_len + flen.dest_pid_len + flen.dest_addr_len +
          flen.src_pid_len + flen.src_addr_len + flen.aux_sec_len;
-#endif
+//#endif
 }
 void
 frame802154_create_fcf(frame802154_fcf_t *fcf, uint8_t *buf)
@@ -379,7 +379,12 @@ frame802154_create_fcf(frame802154_fcf_t *fcf, uint8_t *buf)
     ((fcf->security_enabled & 1) << 3) |
     ((fcf->frame_pending & 1) << 4) |
     ((fcf->ack_required & 1) << 5) |
+#if RPL_CONF_OPP_ROUTING
+    ((fcf->panid_compression & 1) << 6) |
+    ((fcf->use_opp_routing & 1) << 7);
+#else
     ((fcf->panid_compression & 1) << 6);
+#endif
   buf[1] = ((fcf->sequence_number_suppression & 1)) |
     ((fcf->ie_list_present & 1)) << 1 |
     ((fcf->dest_addr_mode & 3) << 2) |
@@ -472,7 +477,7 @@ frame802154_create(frame802154_t *p, uint8_t *buf)
   }
 #endif /* LLSEC802154_USES_AUX_HEADER */
 
-#if __MSP430__
+/*#if __MSP430__
   if(pos % 4) {
     int i;
     for(i = 0; i < 4 - pos % 4; i++) {
@@ -481,8 +486,7 @@ frame802154_create(frame802154_t *p, uint8_t *buf)
     pos += 4 - pos % 4;
   }
   //printf("frame802154: pos %d\n", pos);
-#endif
-
+#endif*/
   return (int)pos;
 }
 
@@ -497,6 +501,9 @@ frame802154_parse_fcf(uint8_t *data, frame802154_fcf_t *pfcf)
   fcf.frame_pending = (data[0] >> 4) & 1;
   fcf.ack_required = (data[0] >> 5) & 1;
   fcf.panid_compression = (data[0] >> 6) & 1;
+#if RPL_CONF_OPP_ROUTING
+  fcf.use_opp_routing = (data[0] >> 7) & 1;
+#endif
 
   fcf.sequence_number_suppression = data[1] & 1;
   fcf.ie_list_present = (data[1] >> 1) & 1;
@@ -646,14 +653,12 @@ frame802154_parse(uint8_t *data, int len, frame802154_t *pf)
   }
 #endif /* LLSEC802154_USES_AUX_HEADER */
 
-#if __MSP430__
+/*#if __MSP430__
   c = p - data;
-  //printf("c1 %d\n", c);
   if(c % 4) {
     p += 4 - c % 4;
   }
-  //printf("frame802154: p %d\n", p);
-#endif
+#endif*/
 
   /* header length */
   c = p - data;
@@ -663,8 +668,6 @@ frame802154_parse(uint8_t *data, int len, frame802154_t *pf)
   pf->payload = p;
 
   /* return header length if successful */
-  //printf("c %d\n", c);
-  //printf("len %d\n", len);
   return c > len ? 0 : c;
 }
 /** \}   */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, Swedish Institute of Computer Science.
+ * Copyright (c) 2015, Swedish Institute of Computer Science.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -25,23 +25,25 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * This file is part of the Contiki operating system.
- *
  */
 
-/**
- * \file
- *         Creates and parses the ContikiMAC header.
- * \author
- *         Konrad Krentz <konrad.krentz@gmail.com>
- */
+#ifndef PROJECT_CONF_H_
+#define PROJECT_CONF_H_
 
-#ifndef LPPRDC_FRAMER_H_
-#define LPPRDC_FRAMER_H_
 
-#include "net/mac/framer.h"
+#define WITH_SOFTACKS 0
 
-extern const struct framer lpprdc_framer;
+#undef NETSTACK_CONF_RDC_CHANNEL_CHECK_RATE
+#define NETSTACK_CONF_RDC_CHANNEL_CHECK_RATE 16
+#undef NETSTACK_CONF_RDC_FRAME_DURATION
+#define NETSTACK_CONF_RDC_FRAME_DURATION 5
+#undef NETSTACK_CONF_RDC
+#define NETSTACK_CONF_RDC contikimac_driver
+#undef NETSTACK_CONF_FRAMER
+#define NETSTACK_CONF_FRAMER contikimac_framer
 
-#endif /* LPPRDC_FRAMER_H_ */
+#define LPPRDC_CONF_INITIAL_PROBE_SIZE 125
+
+#define QUEUEBUF_CONF_NUM 20
+
+#endif /* PROJECT_CONF_H_ */

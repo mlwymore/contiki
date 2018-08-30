@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, Swedish Institute of Computer Science.
+ * Copyright (c) 2015, Swedish Institute of Computer Science.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -25,21 +25,33 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
  */
 
-/**
- * \file
- *         Packet queue for rimac. Use in the MAC layer.
- * \author
- *         Mat Wymore <mlwymore@iastate.edu>
- */
+#ifndef PROJECT_CONF_H_
+#define PROJECT_CONF_H_
 
-#ifndef RIMAC_PACKETQUEUE_H_
-#define RIMAC_PACKETQUEUE_H_
+//#define DATA_ARRIVAL_INTERVAL (3600*CLOCK_SECOND)
+//#define DRIFT_FACTOR 200
+//#define SLEEP_RANGE (2 * DATA_ARRIVAL_INTERVAL / DRIFT_FACTOR)
 
-#include "net/mac/mac.h"
+//#define CSMA_CONF_MAX_FRAME_RETRIES 254
 
-extern const struct mac_driver rimac_packetqueue_driver;
+#define WITH_SOFTACKS 1
 
-#endif
+#undef NETSTACK_CONF_RDC_CHANNEL_CHECK_RATE
+#define NETSTACK_CONF_RDC_CHANNEL_CHECK_RATE 2
+#undef NETSTACK_CONF_RDC_FRAME_DURATION
+#define NETSTACK_CONF_RDC_FRAME_DURATION 5
+#undef NETSTACK_CONF_RDC
+#define NETSTACK_CONF_RDC lpprdc_driver
+#undef NETSTACK_CONF_FRAMER
+#define NETSTACK_CONF_FRAMER framer_802154
+
+#define LPPRDC_CONF_INITIAL_PROBE_SIZE 125
+
+#define QUEUEBUF_CONF_NUM 8
+
+#define LPPRDC_CONF_RESET_BACKOFF_ON_ACK 1
+#define RIMAC_CONF_RESET_BACKOFF_ON_ACK 1
+
+#endif /* PROJECT_CONF_H_ */
