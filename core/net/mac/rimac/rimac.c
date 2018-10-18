@@ -345,7 +345,7 @@ PROCESS_THREAD(probe_process, ev, data)
           activity_seen = 0;
           waiting_for_response = 1;
           /* Need to wait a little extra time if we didn't just send a probe (i.e. the send was handled by softack code) */
-          extra_wait = send_probe == 1 ? 0 : ACK_RECEIVE_DURATION;
+          extra_wait = send_probe == 1 ? 0 : ACK_RECEIVE_DURATION + INTER_PACKET_INTERVAL;
           uint8_t channel_clear = 0;
           rtimer_clock_t wait_time = INTER_PACKET_INTERVAL + PACKET_RECEIVE_DURATION + current_backoff_window * BACKOFF_SLOT_LENGTH + extra_wait;
           

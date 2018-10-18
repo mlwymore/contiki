@@ -141,9 +141,16 @@ packetbuf_hdrreduce(int size)
   if(buflen < size) {
     return 0;
   }
-
+  
   bufptr += size;
   buflen -= size;
+/*  if(hdrlen != 0) {
+  	printf("Nonzero hdrlen %d \n", hdrlen);
+	}
+#if __MSP430__
+	packetbuf_compact();
+#endif*/
+  //printf("packetbuf: hdrreduce size %d, bufptr %d\n", size, bufptr);
   return 1;
 }
 /*---------------------------------------------------------------------------*/
