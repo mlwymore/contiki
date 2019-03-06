@@ -557,7 +557,12 @@ tcpip_ipv6_output(void)
   }
 #endif /* UIP_CONF_IPV6_RPL */
 
+/* Let's go ahead and get the "best" parent. We'll use it for default (blind) sending. */
+/*#if UIP_CONF_IPV6_RPL && RPL_CONF_OPP_ROUTING
+  if(!uip_is_addr_mcast(&UIP_IP_BUF->destipaddr) && !rpl_is_addr_opp(&UIP_IP_BUF->destipaddr)) {
+#else*/
   if(!uip_is_addr_mcast(&UIP_IP_BUF->destipaddr)) {
+//#endif
     /* Next hop determination */
 
 #if UIP_CONF_IPV6_RPL && RPL_WITH_NON_STORING
@@ -573,8 +578,10 @@ tcpip_ipv6_output(void)
     /* We first check if the destination address is on our immediate
        link. If so, we simply use the destination address as our
        nexthop address. */
+    PRINTF("tcpip a %d\n", nexthop);
     if(nexthop == NULL && uip_ds6_is_addr_onlink(&UIP_IP_BUF->destipaddr)){
       nexthop = &UIP_IP_BUF->destipaddr;
+      PRINTF("tcpip b\n");
     }
 
     if(nexthop == NULL) {

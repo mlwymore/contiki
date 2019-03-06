@@ -88,8 +88,8 @@
     <width>280</width>
     <z>2</z>
     <height>160</height>
-    <location_x>400</location_x>
-    <location_y>0</location_y>
+    <location_x>1</location_x>
+    <location_y>404</location_y>
   </plugin>
   <plugin>
     org.contikios.cooja.plugins.Visualizer
@@ -101,7 +101,7 @@
       <viewport>8.98488346901413 0.0 0.0 8.98488346901413 -338.1497257284921 -609.3129753119122</viewport>
     </plugin_config>
     <width>400</width>
-    <z>4</z>
+    <z>3</z>
     <height>400</height>
     <location_x>1</location_x>
     <location_y>1</location_y>
@@ -113,11 +113,11 @@
       <formatted_time />
       <coloring />
     </plugin_config>
-    <width>1455</width>
-    <z>1</z>
-    <height>240</height>
-    <location_x>400</location_x>
-    <location_y>160</location_y>
+    <width>1262</width>
+    <z>0</z>
+    <height>401</height>
+    <location_x>401</location_x>
+    <location_y>-1</location_y>
   </plugin>
   <plugin>
     org.contikios.cooja.plugins.TimeLine
@@ -127,25 +127,13 @@
       <showRadioRXTX />
       <showRadioHW />
       <showLEDs />
-      <zoomfactor>500.0</zoomfactor>
+      <zoomfactor>50.0</zoomfactor>
     </plugin_config>
-    <width>1855</width>
-    <z>0</z>
-    <height>166</height>
-    <location_x>0</location_x>
-    <location_y>867</location_y>
-  </plugin>
-  <plugin>
-    org.contikios.cooja.plugins.Notes
-    <plugin_config>
-      <notes>Enter notes here</notes>
-      <decorations>true</decorations>
-    </plugin_config>
-    <width>1175</width>
-    <z>3</z>
-    <height>160</height>
-    <location_x>680</location_x>
-    <location_y>0</location_y>
+    <width>1673</width>
+    <z>1</z>
+    <height>358</height>
+    <location_x>1</location_x>
+    <location_y>575</location_y>
   </plugin>
 </simconf>
 

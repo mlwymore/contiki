@@ -48,8 +48,8 @@ AUTOSTART_PROCESSES(&example_unicast_process);
 static void
 recv_uc(struct unicast_conn *c, const linkaddr_t *from)
 {
-  printf("unicast message received from %d.%d\n",
-	 from->u8[0], from->u8[1]);
+  //printf("unicast message received from %d.%d\n",
+//	 from->u8[0], from->u8[1]);
 }
 /*---------------------------------------------------------------------------*/
 static void
@@ -59,8 +59,8 @@ sent_uc(struct unicast_conn *c, int status, int num_tx)
   if(linkaddr_cmp(dest, &linkaddr_null)) {
     return;
   }
-  printf("unicast message sent to %d.%d: status %d num_tx %d\n",
-    dest->u8[0], dest->u8[1], status, num_tx);
+  //printf("unicast message sent to %d.%d: status %d num_tx %d\n",
+   // dest->u8[0], dest->u8[1], status, num_tx);
 }
 /*---------------------------------------------------------------------------*/
 static const struct unicast_callbacks unicast_callbacks = {recv_uc, sent_uc};
@@ -82,15 +82,15 @@ PROCESS_THREAD(example_unicast_process, ev, data)
     static struct etimer et;
     
     if (!linkaddr_cmp(&addr, &linkaddr_node_addr)) {
-      etimer_set(&et, CLOCK_SECOND);
+      etimer_set(&et, 1*CLOCK_SECOND);
     
       PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&et));
 
       packetbuf_copyfrom("Hello", 5);
-      printf("unicast message ready to send\n");
-      printf("Me: %d.%d    Receiver: %d.%d\n",
-          linkaddr_node_addr.u8[0], linkaddr_node_addr.u8[1],
-          addr.u8[0], addr.u8[1]);
+      //printf("unicast message ready to send\n");
+      //printf("Me: %d.%d    Receiver: %d.%d\n",
+      //    linkaddr_node_addr.u8[0], linkaddr_node_addr.u8[1],
+      //    addr.u8[0], addr.u8[1]);
       unicast_send(&uc, &addr);
     }
     else {

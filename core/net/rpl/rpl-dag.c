@@ -67,7 +67,7 @@ void RPL_CALLBACK_PARENT_SWITCH(rpl_parent_t *old, rpl_parent_t *new);
 #endif /* RPL_CALLBACK_PARENT_SWITCH */
 
 /*---------------------------------------------------------------------------*/
-extern rpl_of_t rpl_of0, rpl_mrhof;
+extern rpl_of_t rpl_of0, rpl_mrhof, rpl_eep;
 static rpl_of_t * const objective_functions[] = RPL_SUPPORTED_OFS;
 
 /*---------------------------------------------------------------------------*/
@@ -94,7 +94,11 @@ rpl_print_neighbor_list(void)
   if(default_instance != NULL && default_instance->current_dag != NULL &&
       default_instance->of != NULL) {
     int curr_dio_interval = default_instance->dio_intcurrent;
+#if RPL_CONF_OPP_ROUTING
+    int curr_rank = rpl_get_opp_routing_rank();
+#else
     int curr_rank = default_instance->current_dag->rank;
+#endif
     rpl_parent_t *p = nbr_table_head(rpl_parents);
     clock_time_t clock_now = clock_time();
 
@@ -109,7 +113,11 @@ rpl_print_neighbor_list(void)
           rpl_rank_via_parent(p),
           stats != NULL ? stats->freshness : 0,
           link_stats_is_fresh(stats) ? 'f' : ' ',
+#if RPL_CONF_OPP_ROUTING
+          rpl_node_in_forwarder_set(rpl_get_parent_lladdr(p)) ? 'p' : ' ',
+#else
           p == default_instance->current_dag->preferred_parent ? 'p' : ' ',
+#endif
           (unsigned)((clock_now - stats->last_tx_time) / (60 * CLOCK_SECOND))
       );
       p = nbr_table_next(rpl_parents, p);
@@ -437,6 +445,9 @@ rpl_set_root(uint8_t instance_id, uip_ipaddr_t *dag_id)
   ANNOTATE("#A root=%u\n", dag->dag_id.u8[sizeof(dag->dag_id) - 1]);
 
   rpl_reset_dio_timer(instance);
+#if RPL_CONF_OPP_ROUTING
+  rpl_opp_routing_reset();
+#endif
 
   return dag;
 }
@@ -1346,6 +1357,28 @@ rpl_recalculate_ranks(void)
    * from a timer in order to keep the stack depth reasonably low.
    */
   p = nbr_table_head(rpl_parents);
+
+#if RPL_CONF_OPP_ROUTING
+  rpl_instance_t *instance_needs_updating = NULL;
+  while(p != NULL) {
+    if(p->dag != NULL && p->dag->instance && (p->flags & RPL_PARENT_FLAG_UPDATED)) {
+      p->flags &= ~RPL_PARENT_FLAG_UPDATED;
+      if(!rpl_process_parent_event(p->dag->instance, p)) {
+        PRINTF("RPL: A parent was dropped\n");
+      } else {
+        if(instance_needs_updating != NULL && instance_needs_updating != p->dag->instance) {
+          printf("RPL: warning: overriding instance to update\n");
+        }
+        instance_needs_updating = p->dag->instance;
+      }
+    }
+    p = nbr_table_next(rpl_parents, p);
+  }
+  //TODO: only updates one instance...
+  if(instance_needs_updating != NULL) {
+    rpl_update_forwarder_set(instance_needs_updating);
+  }
+#else
   while(p != NULL) {
     if(p->dag != NULL && p->dag->instance && (p->flags & RPL_PARENT_FLAG_UPDATED)) {
       p->flags &= ~RPL_PARENT_FLAG_UPDATED;
@@ -1356,6 +1389,7 @@ rpl_recalculate_ranks(void)
     }
     p = nbr_table_next(rpl_parents, p);
   }
+#endif
 }
 /*---------------------------------------------------------------------------*/
 int
@@ -1368,6 +1402,12 @@ rpl_process_parent_event(rpl_instance_t *instance, rpl_parent_t *p)
   rpl_rank_t old_rank;
   old_rank = instance->current_dag->rank;
 #endif /* DEBUG */
+
+/*#if RPL_CONF_OPP_ROUTING
+  rpl_rank_t old_parent_rank;
+  old_parent_rank = instance->of->parent_path_cost(p);
+  printf("RPL: Parent's old rank: %u, new rank: %u\n", old_parent_rank, p->rank);
+#endif*/
 
   return_value = 1;
 
@@ -1416,6 +1456,15 @@ rpl_process_parent_event(rpl_instance_t *instance, rpl_parent_t *p)
     }
   }
 #endif /* DEBUG */
+
+/*#if RPL_CONF_OPP_ROUTING
+  if(old_parent_rank != p->rank) {
+    PRINTF("RPL: updating forwarder set\n");
+    rpl_update_forwarder_set(instance);
+  } else {
+    printf("RPL: parent unchanged, not updating set\n");
+  }
+#endif*/
 
   return return_value;
 }

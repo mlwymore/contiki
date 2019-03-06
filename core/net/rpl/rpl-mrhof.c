@@ -147,6 +147,8 @@ parent_path_cost(rpl_parent_t *p)
     case RPL_DAG_MC_ENERGY:
       base = p->mc.obj.energy.energy_est << 8;
       break;
+    case RPL_DAG_MC_EEP:
+      base = p->mc.obj.eep;
     default:
       base = p->rank;
       break;
@@ -155,8 +157,12 @@ parent_path_cost(rpl_parent_t *p)
   base = p->rank;
 #endif /* RPL_WITH_MC */
 
+#if RPL_CONF_OPP_ROUTING
+  return MIN((uint32_t)base + 2 * parent_link_metric(p) / LINK_STATS_ETX_DIVISOR, 0xffff);
+#else
   /* path cost upper bound: 0xffff */
   return MIN((uint32_t)base + parent_link_metric(p), 0xffff);
+#endif
 }
 /*---------------------------------------------------------------------------*/
 static rpl_rank_t
@@ -269,7 +275,11 @@ update_metric_container(rpl_instance_t *instance)
     instance->mc.prec = 0;
     path_cost = dag->rank;
   } else {
+#if RPL_CONF_OPP_ROUTING
+    path_cost = rpl_get_opp_rank();
+#else
     path_cost = parent_path_cost(dag->preferred_parent);
+#endif
   }
 
   /* Handle the different MC types */
@@ -290,6 +300,10 @@ update_metric_container(rpl_instance_t *instance)
       instance->mc.obj.energy.flags = type << RPL_DAG_MC_ENERGY_TYPE;
       /* Energy_est is only one byte, use the least significant byte of the path metric. */
       instance->mc.obj.energy.energy_est = path_cost >> 8;
+      break;
+    case RPL_DAG_MC_EEP:
+      instance->mc.length = sizeof(mc.obj.eep);
+      instance->mc.obj.eep = path_cost;
       break;
     default:
       PRINTF("RPL: MRHOF, non-supported MC %u\n", instance->mc.type);

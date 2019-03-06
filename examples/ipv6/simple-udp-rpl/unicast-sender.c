@@ -47,10 +47,12 @@
 #include <string.h>
 
 #define UDP_PORT 1234
-#define SERVICE_ID 190
+#define SERVICE_ID_BASE 190
 
-#define SEND_INTERVAL		(60 * CLOCK_SECOND)
-#define SEND_TIME		(random_rand() % (SEND_INTERVAL))
+#define SEND_INTERVAL		(CLOCK_SECOND / 2)
+#define SEND_TIME		(SEND_INTERVAL + (random_rand() % CLOCK_SECOND))
+
+#define NUM_PACKETS_TO_SEND 600
 
 static struct simple_udp_connection unicast_connection;
 
@@ -72,15 +74,14 @@ receiver(struct simple_udp_connection *c,
 }
 /*---------------------------------------------------------------------------*/
 static void
-set_global_address(void)
+set_global_address(uip_ipaddr_t *ipaddr)
 {
-  uip_ipaddr_t ipaddr;
   int i;
   uint8_t state;
 
-  uip_ip6addr(&ipaddr, UIP_DS6_DEFAULT_PREFIX, 0, 0, 0, 0, 0, 0, 0);
-  uip_ds6_set_addr_iid(&ipaddr, &uip_lladdr);
-  uip_ds6_addr_add(&ipaddr, 0, ADDR_AUTOCONF);
+  uip_ip6addr(ipaddr, UIP_DS6_DEFAULT_PREFIX, 0, 0, 0, 0, 0, 0, 0);
+  uip_ds6_set_addr_iid(ipaddr, &uip_lladdr);
+  uip_ds6_addr_add(ipaddr, 0, ADDR_AUTOCONF);
 
   printf("IPv6 addresses: ");
   for(i = 0; i < UIP_DS6_ADDR_NB; i++) {
@@ -97,38 +98,56 @@ PROCESS_THREAD(unicast_sender_process, ev, data)
 {
   static struct etimer periodic_timer;
   static struct etimer send_timer;
-  uip_ipaddr_t *addr;
+  //uip_ipaddr_t *addr;
+  static uip_ipaddr_t addr;
+  static uint8_t service_id;
+  static unsigned int message_number = 0;
 
   PROCESS_BEGIN();
 
-  servreg_hack_init();
+  //servreg_hack_init();
 
-  set_global_address();
+  set_global_address(&addr);
+        uip_debug_ipaddr_print(&addr);
+  uip_ipaddr_copy(&addr, &uip_ds6_get_link_local(1)->ipaddr);
+  addr.u8[15] -= 1;
+        uip_debug_ipaddr_print(&addr);
 
   simple_udp_register(&unicast_connection, UDP_PORT,
                       NULL, UDP_PORT, receiver);
+                      
+  service_id = SERVICE_ID_BASE + uip_lladdr.addr[7] - 1;
+  printf("Service ID: %d\n", service_id);
 
-  etimer_set(&periodic_timer, SEND_INTERVAL);
+  //etimer_set(&periodic_timer, SEND_INTERVAL);
+  etimer_set(&send_timer, 10*CLOCK_SECOND);
+  PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&send_timer));
   while(1) {
 
-    PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&periodic_timer));
-    etimer_reset(&periodic_timer);
+    //PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&periodic_timer));
+    //etimer_reset(&periodic_timer);
     etimer_set(&send_timer, SEND_TIME);
 
     PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&send_timer));
-    addr = servreg_hack_lookup(SERVICE_ID);
-    if(addr != NULL) {
-      static unsigned int message_number;
+    //addr = servreg_hack_lookup(service_id);
+    //uip_gethostaddr(&addr);
+    
+    if(&addr != NULL) {
       char buf[20];
 
-      printf("Sending unicast to ");
-      uip_debug_ipaddr_print(addr);
+      printf("Sending unicast %d to ", message_number);
+      uip_debug_ipaddr_print(&addr);
       printf("\n");
+      printf("SEND %d\n", message_number);
       sprintf(buf, "Message %d", message_number);
       message_number++;
-      simple_udp_sendto(&unicast_connection, buf, strlen(buf) + 1, addr);
+      simple_udp_sendto(&unicast_connection, buf, strlen(buf) + 1, &addr);
     } else {
-      printf("Service %d not found\n", SERVICE_ID);
+      printf("Service %d not found\n", service_id);
+    }
+    if(message_number >= NUM_PACKETS_TO_SEND) {
+    	printf("DONE\n");
+    	break;
     }
   }
 

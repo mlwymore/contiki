@@ -70,6 +70,10 @@
 #include "net/ipv6/sicslowpan.h"
 #include "net/netstack.h"
 
+#if UIP_CONF_IPV6_RPL && RPL_CONF_OPP_ROUTING
+#include "net/rpl/rpl.h"
+#endif
+
 #include <stdio.h>
 
 #define DEBUG DEBUG_NONE
@@ -1048,6 +1052,8 @@ uncompress_hdr_iphc(uint8_t *buf, uint16_t ip_len)
     /* no compression and link local */
     uncompress_addr(&SICSLOWPAN_IP_BUF(buf)->srcipaddr, llprefix, unc_llconf[tmp],
                     (uip_lladdr_t *)packetbuf_addr(PACKETBUF_ADDR_SENDER));
+    //PRINT6ADDR(packetbuf_addr(PACKETBUF_ADDR_SENDER));
+    //PRINTF("\n");
   }
 
   /* Destination address */
@@ -1251,6 +1257,10 @@ send_packet(linkaddr_t *dest)
 #if NETSTACK_CONF_BRIDGE_MODE
   /* This needs to be explicitly set here for bridge mode to work */
   packetbuf_set_addr(PACKETBUF_ADDR_SENDER,(void*)&uip_lladdr);
+#endif
+
+#if UIP_CONF_IPV6_RPL && RPL_CONF_OPP_ROUTING
+  packetbuf_set_attr(PACKETBUF_ATTR_USE_OPP_ROUTING, rpl_is_addr_opp(&UIP_IP_BUF->destipaddr));
 #endif
 
   /* Provide a callback function to receive the result of

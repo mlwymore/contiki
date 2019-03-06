@@ -10,24 +10,28 @@ SINK_DIRECTORY="$AUX_DIRECTORY"
 SOURCE_APP="example-unicast"
 SINK_APP="example-unicast"
 SOURCE_FILE_PATH="$AUX_DIRECTORY/example-unicast.c"
-CSC_LIST=("$AUX_DIRECTORY/unicast-example-z1-1.csc" "$AUX_DIRECTORY/unicast-example-z1-2.csc" "$AUX_DIRECTORY/unicast-example-z1-3.csc" "$AUX_DIRECTORY/unicast-example-z1-4.csc" "$AUX_DIRECTORY/unicast-example-z1-5.csc" "$AUX_DIRECTORY/unicast-example-z1-6.csc")
-#CSC_LIST=("$AUX_DIRECTORY/unicast-example-z1-1.csc")
+CSC_LIST=("$AUX_DIRECTORY/unicast-example-z1-1.csc" "$AUX_DIRECTORY/unicast-example-z1-2.csc" "$AUX_DIRECTORY/unicast-example-z1-3.csc" "$AUX_DIRECTORY/unicast-example-z1-4.csc")
+#CSC_LIST=("$AUX_DIRECTORY/unicast-example-z1-4.csc")
 PROJ_CONF_DIR=$AUX_DIRECTORY
 PROJ_CONF_LIST=("project-conf.h")
-PROTOCOL_LIST=("lpprdc" "rimac" "contikimac" "contikimac")
-OPP_CONF_LIST=(0 0 0 0)
-CCR_LIST=(2 2 2 16)
+PROTOCOL_LIST=("lpprdc" "rimac" "contikimac")
+CCR_LIST=(2 2 2)
+OPP_CONF_LIST=(0 0 0)
+TBI_LIST=(100 100 100)
+#PROTOCOL_LIST=("lpprdc")
+#CCR_LIST=(2)
+#OPP_CONF_LIST=(0)
+#TBI_LIST=(125)
+DAI_LIST=(1)
 MAKEFILE="$AUX_DIRECTORY/Makefile"
-
-DRIFT_FACTOR_LIST=(1) 
 
 if [ ! -d "$RESULTS_DIRECTORY" ]; then
 	mkdir -p $RESULTS_DIRECTORY
 fi
 
-rm $RESULTS_DIRECTORY/*.txt
+#rm $RESULTS_DIRECTORY/*.txt
 
-NUMRUNS=5
+NUMRUNS=15
 
 BOOTTIME=10
 
@@ -35,34 +39,38 @@ BOOTTIME=10
 RUNLENGTH=300
 
 #CHANNEL_CHECK_RATES=(2 4 8 16)
-TX_RANGES=(100)
-INTERFERENCE_RANGES=(120)
-DAI=1
-for JNDEX in "${!TX_RANGES[@]}"; do
-TX_RANGE=${TX_RANGES[$JNDEX]}
-INTERFERENCE_RANGE=${INTERFERENCE_RANGES[$JNDEX]}
+TX_RANGES=(75)
+INTERFERENCE_RANGES=(75)
+for DAI in "${DAI_LIST[@]}"; do
+	for JNDEX in "${!TX_RANGES[@]}"; do
+	TX_RANGE=${TX_RANGES[$JNDEX]}
+	INTERFERENCE_RANGE=${INTERFERENCE_RANGES[$JNDEX]}
 
-	NUMPACKETS=$((RUNLENGTH / DAI))
-	sed -i 's/#define NUM_PACKETS_TO_SEND.*/#define NUM_PACKETS_TO_SEND '$NUMPACKETS'/' $SOURCE_FILE_PATH
-#	sed -i 's/#define PERIOD.*/#define PERIOD '$DAI'/' $SOURCE_FILE_PATH
-	TIMEOUT_MS=$(((BOOTTIME + (NUMPACKETS + 2) * (DAI)) * 1000))
-  for CSC in "${CSC_LIST[@]}"; do
-		sed -i 's/"-dai.*/"-dai'$DAI'" +/' $CSC
-		sed -i 's/^TIMEOUT.*/TIMEOUT('$TIMEOUT_MS', log.append(filename, plugin.radioStatistics());)/' $CSC
-		sed -i 's/<transmitting_range>.*/<transmitting_range>'$TX_RANGE'<\/transmitting_range>/' $CSC
-		sed -i 's/<interference_range>.*/<interference_range>'$INTERFERENCE_RANGE'<\/interference_range>/' $CSC
-		sed -i 's/"-tx.*/"-tx'$TX_RANGE'" +/' $CSC
-	done
-for DF in "${DRIFT_FACTOR_LIST[@]}"; do
-	sed -i 's/$define DRIFT_FACTOR.*/#define DRIFT_FACTOR '$DRIFT_FACTOR'/' ${PROJ_CONF_LIST[0]}
+		if [ "$DAI" == "0.5" ]; then
+			NUMPACKETS=$((RUNLENGTH * 2))
+		else
+			NUMPACKETS=$((RUNLENGTH / DAI))
+		fi
+		sed -i 's/#define NUM_PACKETS_TO_SEND.*/#define NUM_PACKETS_TO_SEND '$NUMPACKETS'/' $SOURCE_FILE_PATH
+		sed -i 's/#define DATA_INTERVAL.*/#define DATA_INTERVAL '$DAI'/' $SOURCE_FILE_PATH
+		if [ "$DAI" == "0.5" ]; then
+			TIMEOUT_MS=$(((BOOTTIME + 1 + (NUMPACKETS + 1) * (1)) * 1000))
+		else
+			TIMEOUT_MS=$(((BOOTTIME + DAI + (NUMPACKETS + 1) * (DAI + 1)) * 1000))
+		fi
+
+		for CSC in "${CSC_LIST[@]}"; do
+			sed -i 's/"-dai.*/"-dai'$DAI'" +/' $CSC
+			sed -i 's/^TIMEOUT.*/TIMEOUT('$TIMEOUT_MS', log.append(filename, mote.getSimulation().getCooja().getStartedPlugin("PowerTracker").radioStatistics());)/' $CSC
+			sed -i 's/<transmitting_range>.*/<transmitting_range>'$TX_RANGE'<\/transmitting_range>/' $CSC
+			sed -i 's/<interference_range>.*/<interference_range>'$INTERFERENCE_RANGE'<\/interference_range>/' $CSC
+			sed -i 's/"-tx.*/"-tx'$TX_RANGE'" +/' $CSC
+		done
 	for CSC in "${CSC_LIST[@]}"; do
-		sed -i 's/"-df.*/"-df'$DF'" +/' $CSC
-	
-		NUM_SENDERS=$(echo $CSC | cut -f '4' -d '-' | cut -f '1' -d '.')
-		echo $NUM_SENDERS
-		sed -i 's/#define NUM_SENDERS.*/#define NUM_SENDERS '$NUM_SENDERS'/' $SOURCE_FILE_PATH
-		sed -i 's/numSenders = .*/numSenders = '$NUM_SENDERS';/' $CSC
-		sed -i 's/numPackets = .*/numPackets = '$NUMPACKETS';/' $CSC
+			NUM_FLOWS=$(echo $CSC | cut -f '4' -d '-' | cut -f '1' -d '.')
+			echo $NUM_FLOWS
+			sed -i 's/numSenders = .*/numSenders = '$NUM_FLOWS';/' $CSC
+			sed -i 's/numPackets = .*/numPackets = '$NUMPACKETS';/' $CSC
 
 		for ((i=0;i<NUMRUNS;i++)); do
 			SEED=$RANDOM
@@ -76,13 +84,15 @@ for DF in "${DRIFT_FACTOR_LIST[@]}"; do
 				PROTOCOL=${PROTOCOL_LIST[$INDEX]}
 				OPP_CONF=${OPP_CONF_LIST[$INDEX]}
 				CHANNEL_CHECK_RATE=${CCR_LIST[$INDEX]}
-		                for PROJ_CONF in "${PROJ_CONF_LIST[@]}"; do
-			          sed -i 's/#define NETSTACK_CONF_RDC_CHANNEL_CHECK_RATE.*/#define NETSTACK_CONF_RDC_CHANNEL_CHECK_RATE '$CHANNEL_CHECK_RATE'/' $PROJ_CONF_DIR/$PROJ_CONF
-		                done
-		                #for CSC in "${CSC_LIST[@]}"; do
-			          sed -i 's/"-ccr.*/"-ccr'$CHANNEL_CHECK_RATE'-" +/' $CSC
-		                #done
+				TBI=${TBI_LIST[$INDEX]}
+		    for PROJ_CONF in "${PROJ_CONF_LIST[@]}"; do
+			  	sed -i 's/#define NETSTACK_CONF_RDC_CHANNEL_CHECK_RATE.*/#define NETSTACK_CONF_RDC_CHANNEL_CHECK_RATE '$CHANNEL_CHECK_RATE'/' $PROJ_CONF_DIR/$PROJ_CONF
+			  	sed -i 's/#define LPPRDC_CONF_INITIAL_PROBE_SIZE.*/#define LPPRDC_CONF_INITIAL_PROBE_SIZE '$TBI'/' $PROJ_CONF_DIR/$PROJ_CONF
+		    done
+			          
+			  sed -i 's/"-ccr.*/"-ccr'$CHANNEL_CHECK_RATE'" +/' $CSC
 				sed -i 's/"-rdc.*/"-rdc'$PROTOCOL'" +/' $CSC
+				sed -i 's/"-tbi.*/"-tbi'$TBI'-" +/' $CSC
 				sed -i 's/#define NETSTACK_CONF_RDC .*/#define NETSTACK_CONF_RDC '$PROTOCOL'_driver/' $PROJ_CONF_DIR/${PROJ_CONF_LIST[0]}
 				if [ "$PROTOCOL" == "contikimac" ]; then
 					sed -i 's/#define NETSTACK_CONF_FRAMER .*/#define NETSTACK_CONF_FRAMER '$PROTOCOL'_framer/' $PROJ_CONF_DIR/${PROJ_CONF_LIST[0]}

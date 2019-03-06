@@ -11,18 +11,17 @@ SOURCE_APP="example-unicast"
 SINK_APP="example-unicast"
 SOURCE_FILE_PATH="$AUX_DIRECTORY/example-unicast.c"
 CSC_LIST=("$AUX_DIRECTORY/unicast-example-z1-1.csc" "$AUX_DIRECTORY/unicast-example-z1-2.csc" "$AUX_DIRECTORY/unicast-example-z1-3.csc" "$AUX_DIRECTORY/unicast-example-z1-4.csc")
-#CSC_LIST=("$AUX_DIRECTORY/unicast-example-z1-2.csc")
 PROJ_CONF_DIR=$AUX_DIRECTORY
 PROJ_CONF_LIST=("project-conf.h")
-#PROTOCOL_LIST=("lpprdc" "rimac" "contikimac" "contikimac" "contikimac" "contikimac")
-#OPP_CONF_LIST=(0 0 0 0 0 0)
-#CCR_LIST=(2 2 2 4 8 16)
-#TBI_LIST=(125 125 125 125 125 125)
-PROTOCOL_LIST=("lpprdc" "lpprdc" "lpprdc" "lpprdc" "lpprdc" "rimac" "contikimac" "contikimac" "contikimac" "contikimac")
-CCR_LIST=(2 2 2 2 2 2 2 4 8 16)
-OPP_CONF_LIST=(0 0 0 0 0 0 0 0 0 0)
-TBI_LIST=(25 50 75 100 125 125 125 125 125 125)
-DAI_LIST=(16)
+PROTOCOL_LIST=("lpprdc" "rimac" "contikimac")
+CCR_LIST=(2 2 2)
+OPP_CONF_LIST=(0 0 0)
+TBI_LIST=(100 100 100)
+#PROTOCOL_LIST=("lpprdc")
+#CCR_LIST=(2)
+#OPP_CONF_LIST=(0)
+#TBI_LIST=(125)
+DAI_LIST=(1)
 MAKEFILE="$AUX_DIRECTORY/Makefile"
 
 if [ ! -d "$RESULTS_DIRECTORY" ]; then
@@ -31,7 +30,7 @@ fi
 
 #rm $RESULTS_DIRECTORY/*.txt
 
-NUMRUNS=3
+NUMRUNS=11
 
 BOOTTIME=10
 
@@ -61,7 +60,7 @@ for DAI in "${DAI_LIST[@]}"; do
 
 		for CSC in "${CSC_LIST[@]}"; do
 			sed -i 's/"-dai.*/"-dai'$DAI'" +/' $CSC
-			sed -i 's/^TIMEOUT.*/TIMEOUT('$TIMEOUT_MS', log.append(filename, plugin.radioStatistics());)/' $CSC
+			sed -i 's/^TIMEOUT.*/TIMEOUT('$TIMEOUT_MS', log.append(filename, mote.getSimulation().getCooja().getStartedPlugin("PowerTracker").radioStatistics());)/' $CSC
 			sed -i 's/<transmitting_range>.*/<transmitting_range>'$TX_RANGE'<\/transmitting_range>/' $CSC
 			sed -i 's/<interference_range>.*/<interference_range>'$INTERFERENCE_RANGE'<\/interference_range>/' $CSC
 			sed -i 's/"-tx.*/"-tx'$TX_RANGE'" +/' $CSC

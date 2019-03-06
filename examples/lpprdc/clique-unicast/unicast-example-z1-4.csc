@@ -9,7 +9,7 @@
   <project EXPORT="discard">[APPS_DIR]/mobility</project>
   <simulation>
     <title>flows4</title>
-    <randomseed>123456</randomseed>
+    <randomseed>30365</randomseed>
     <motedelay_us>1000000</motedelay_us>
     <radiomedium>
       org.contikios.cooja.radiomediums.UDGM
@@ -257,23 +257,23 @@
     org.contikios.cooja.plugins.ScriptRunner
     <plugin_config>
       <script>/* Begin script */
-TIMEOUT(349000, log.append(filename, plugin.radioStatistics());)
+TIMEOUT(613000, log.append(filename, mote.getSimulation().getCooja().getStartedPlugin("PowerTracker").radioStatistics());)
 
 plugin = mote.getSimulation().getCooja().getStartedPlugin("PowerTracker");
 
 filename = "/home/user/git/contiki/examples/lpprdc/clique-unicast/cooja-results/" + 
     mote.getSimulation().getTitle() +
     "-df1" +
-    "-dai16" +
+    "-dai1" +
     "-tx100" +
     "-rdccontikimac" +
     "-opp0" +
-    "-ccr16" +
-    "-tbi125-" +
+    "-ccr2" +
+    "-tbi100-" +
     mote.getSimulation().getRandomSeed() + ".txt";
 
 numFlows = 4;
-numPackets = 18;
+numPackets = 300;
 packetCount = 0;
 
 t = mote.getSimulation().getSimulationTime();

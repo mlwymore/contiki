@@ -31,7 +31,7 @@
 #define PROJECT_CONF_H_
 
 #ifndef WITH_NON_STORING
-#define WITH_NON_STORING 0 /* Set this to run with non-storing mode */
+#define WITH_NON_STORING 1 /* Set this to run with non-storing mode */
 #endif /* WITH_NON_STORING */
 
 #undef NBR_TABLE_CONF_MAX_NEIGHBORS
@@ -39,18 +39,34 @@
 
 #ifdef TEST_MORE_ROUTES
 /* configure number of neighbors and routes */
-#define NBR_TABLE_CONF_MAX_NEIGHBORS     10
-#define UIP_CONF_MAX_ROUTES   30
+#define NBR_TABLE_CONF_MAX_NEIGHBORS     25
+#define UIP_CONF_MAX_ROUTES   60
 #else
 /* configure number of neighbors and routes */
-#define NBR_TABLE_CONF_MAX_NEIGHBORS     10
-#define UIP_CONF_MAX_ROUTES   10
+#define NBR_TABLE_CONF_MAX_NEIGHBORS     25
+#define UIP_CONF_MAX_ROUTES   25
 #endif /* TEST_MORE_ROUTES */
 
+
+#define RPL_WITH_MC 0
+#define RPL_CONF_OPP_ROUTING 0
+#define RPL_CONF_OF_OCP RPL_OCP_MRHOF
+#define RPL_CONF_SUPPORTED_OFS {&rpl_eep, &rpl_mrhof}
+
+#define WITH_SOFTACKS 1
+
+#undef NETSTACK_CONF_RDC_CHANNEL_CHECK_RATE
+#define NETSTACK_CONF_RDC_CHANNEL_CHECK_RATE 4
+#undef NETSTACK_CONF_RDC_FRAME_DURATION
+#define NETSTACK_CONF_RDC_FRAME_DURATION 5
 #undef NETSTACK_CONF_RDC
-#define NETSTACK_CONF_RDC     nullrdc_driver
-#undef NULLRDC_CONF_802154_AUTOACK
-#define NULLRDC_CONF_802154_AUTOACK       1
+#define NETSTACK_CONF_RDC rimac_driver
+#undef NETSTACK_CONF_FRAMER
+#define NETSTACK_CONF_FRAMER framer_802154
+
+#define LPPRDC_CONF_WITH_PROBE_TRAIN 1
+
+#define QUEUEBUF_CONF_NUM 8
 
 /* Define as minutes */
 #define RPL_CONF_DEFAULT_LIFETIME_UNIT   60

@@ -10,7 +10,7 @@
   <simulation>
     <title>flows5</title>
     <randomseed>123456</randomseed>
-    <motedelay_us>25000</motedelay_us>
+    <motedelay_us>1000000</motedelay_us>
     <radiomedium>
       org.contikios.cooja.radiomediums.UDGM
       <transmitting_range>100</transmitting_range>
@@ -219,16 +219,17 @@
     org.contikios.cooja.plugins.ScriptRunner
     <plugin_config>
       <script>/* Begin script */
-TIMEOUT(312000, log.append(filename, plugin.radioStatistics());)
+TIMEOUT(613000, log.append(filename, plugin.radioStatistics());)
 
 filename = "/home/user/git/contiki/examples/lpprdc/star/cooja-results/" + 
     mote.getSimulation().getTitle() +
     "-df1" +
     "-dai1" +
     "-tx100" +
-    "-rdccontikimac" +
+    "-rdclpprdc" +
     "-opp0" +
-    "-ccr16-" +
+    "-ccr2" +
+    "-tbi125-" +
     mote.getSimulation().getRandomSeed() + ".txt";
 
 numSenders = 5;

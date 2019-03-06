@@ -26,14 +26,12 @@
  * This file is part of the Contiki operating system.
  *
  */
-
 #include "contiki.h"
 #include "contiki-lib.h"
 #include "contiki-net.h"
 #include "net/ip/uip.h"
 #include "net/rpl/rpl.h"
 #include "net/linkaddr.h"
-
 #include "net/netstack.h"
 #include "dev/button-sensor.h"
 #include "dev/serial-line.h"
@@ -90,6 +88,8 @@ collect_common_net_init(void)
   serial_line_init();
 
   PRINTF("I am sink!\n");
+  //NETSTACK_RDC.off(0);
+  //NETSTACK_RDC.init();
 }
 /*---------------------------------------------------------------------------*/
 static void
@@ -99,7 +99,6 @@ tcpip_handler(void)
   linkaddr_t sender;
   uint8_t seqno;
   uint8_t hops;
-
   if(uip_newdata()) {
     appdata = (uint8_t *)uip_appdata;
     sender.u8[0] = UIP_IP_BUF->srcipaddr.u8[15];

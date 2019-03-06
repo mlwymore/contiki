@@ -10,11 +10,11 @@
   <simulation>
     <title>flows2</title>
     <randomseed>123456</randomseed>
-    <motedelay_us>25000</motedelay_us>
+    <motedelay_us>1000000</motedelay_us>
     <radiomedium>
       org.contikios.cooja.radiomediums.UDGM
-      <transmitting_range>100</transmitting_range>
-      <interference_range>120</interference_range>
+      <transmitting_range>75</transmitting_range>
+      <interference_range>75</interference_range>
       <success_ratio_tx>1.0</success_ratio_tx>
       <success_ratio_rx>1.0</success_ratio_rx>
     </radiomedium>
@@ -45,8 +45,8 @@
       <breakpoints />
       <interface_config>
         org.contikios.cooja.interfaces.Position
-        <x>82.45117687053667</x>
-        <y>90.0660093026363</y>
+        <x>0</x>
+        <y>0</y>
         <z>0.0</z>
       </interface_config>
       <interface_config>
@@ -63,8 +63,8 @@
       <breakpoints />
       <interface_config>
         org.contikios.cooja.interfaces.Position
-        <x>44.53120632368774</x>
-        <y>89.83566130147413</y>
+        <x>50</x>
+        <y>50</y>
         <z>0.0</z>
       </interface_config>
       <interface_config>
@@ -81,8 +81,8 @@
       <breakpoints />
       <interface_config>
         org.contikios.cooja.interfaces.Position
-        <x>81.701873285537</x>
-        <y>70.58019876869022</y>
+        <x>-50</x>
+        <y>-50</y>
         <z>0.0</z>
       </interface_config>
       <interface_config>
@@ -162,16 +162,17 @@
     org.contikios.cooja.plugins.ScriptRunner
     <plugin_config>
       <script>/* Begin script */
-TIMEOUT(312000, log.append(filename, plugin.radioStatistics());)
+TIMEOUT(613000, log.append(filename, mote.getSimulation().getCooja().getStartedPlugin("PowerTracker").radioStatistics());)
 
 filename = "/home/user/git/contiki/examples/lpprdc/star/cooja-results/" + 
     mote.getSimulation().getTitle() +
     "-df1" +
     "-dai1" +
-    "-tx100" +
+    "-tx75" +
     "-rdccontikimac" +
     "-opp0" +
-    "-ccr16-" +
+    "-ccr2" +
+    "-tbi100-" +
     mote.getSimulation().getRandomSeed() + ".txt";
 
 numSenders = 2;

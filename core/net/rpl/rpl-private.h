@@ -165,6 +165,8 @@
  * in section 6.1 of RFC6719. */
 #if RPL_OF_OCP == RPL_OCP_MRHOF
 #define RPL_MIN_HOPRANKINC          128
+#elif RPL_OF_OCP == RPL_OCP_EEP
+#define RPL_MIN_HOPRANKINC          1000 / NETSTACK_CONF_RDC_CHANNEL_CHECK_RATE / NETSTACK_CONF_RDC_FRAME_DURATION /NBR_TABLE_CONF_MAX_NEIGHBORS
 #else /* RPL_OF_OCP == RPL_OCP_MRHOF */
 #define RPL_MIN_HOPRANKINC          256
 #endif /* RPL_OF_OCP == RPL_OCP_MRHOF */
@@ -173,7 +175,11 @@
 #endif /* RPL_CONF_MIN_HOPRANKINC */
 
 #ifndef RPL_CONF_MAX_RANKINC
+#if RPL_OF_OCP == RPL_OCP_EEP
+#define RPL_MAX_RANKINC             1000 / NETSTACK_CONF_RDC_CHANNEL_CHECK_RATE / NETSTACK_CONF_RDC_FRAME_DURATION / 2 + 7 * 128 * 2
+#else
 #define RPL_MAX_RANKINC             (7 * RPL_MIN_HOPRANKINC)
+#endif
 #else /* RPL_CONF_MAX_RANKINC */
 #define RPL_MAX_RANKINC             RPL_CONF_MAX_RANKINC
 #endif /* RPL_CONF_MAX_RANKINC */
@@ -185,7 +191,11 @@
 #define BASE_RANK                       0
 
 /* Rank of a root node. */
+#if RPL_OF_OCP == RPL_OCP_EEP
+#define ROOT_RANK(instance)             0
+#else
 #define ROOT_RANK(instance)             (instance)->min_hoprankinc
+#endif
 
 #define INFINITE_RANK                   0xffff
 
@@ -404,5 +414,12 @@ void rpl_poison_routes(rpl_dag_t *, rpl_parent_t *);
 
 
 rpl_instance_t *rpl_get_default_instance(void);
+
+#if RPL_CONF_OPP_ROUTING
+void rpl_update_forwarder_set(rpl_instance_t *instance);
+void rpl_opp_routing_init(void);
+rpl_rank_t rpl_get_opp_routing_rank(void);
+void rpl_opp_routing_reset(void);
+#endif
 
 #endif /* RPL_PRIVATE_H */

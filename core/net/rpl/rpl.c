@@ -334,6 +334,9 @@ rpl_init(void)
   PRINTF("RPL: RPL started\n");
   default_instance = NULL;
 
+#if RPL_CONF_OPP_ROUTING
+  rpl_opp_routing_init();
+#endif
   rpl_dag_init();
   rpl_reset_periodic_timer();
   rpl_icmp6_register_handlers();

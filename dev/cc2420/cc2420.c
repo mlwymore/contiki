@@ -179,6 +179,24 @@ static uint8_t volatile poll_mode = 0;
 /* Do we perform a CCA before sending? */
 static uint8_t send_on_cca = WITH_SEND_CCA;
 
+#if WITH_SOFTACKS
+#include "lib/memb.h"
+#include "lib/list.h"
+
+/* Read a byte from RAM in the CC2420 */
+#define CC2420_READ_RAM_BYTE(var,adr)                    \
+  do {                                                       \
+    CC2420_SPI_ENABLE();                                     \
+    SPI_WRITE(0x80 | ((adr) & 0x7f));                        \
+    SPI_WRITE((((adr) >> 1) & 0xc0) | 0x20);                 \
+    SPI_RXBUF;                                               \
+    SPI_READ((var));                    \
+    CC2420_SPI_DISABLE();                                    \
+  } while(0)
+
+#define FIFOP_THRESHOLD 44
+#endif
+
 static radio_result_t
 get_value(radio_param_t param, radio_value_t *value)
 {
@@ -786,6 +804,12 @@ static int
 cc2420_prepare(const void *payload, unsigned short payload_len)
 {
   uint8_t total_len;
+
+  /* added for lpprdc */
+  if(locked) {
+    return 1;
+  }
+  /* end add */
   
   GET_LOCK();
 
@@ -871,6 +895,10 @@ int
 cc2420_set_channel(int c)
 {
   uint16_t f;
+  
+  if(locked) {
+  	return 0;
+  }
 
   GET_LOCK();
   /*
@@ -901,6 +929,10 @@ cc2420_set_pan_addr(unsigned pan,
                     unsigned addr,
                     const uint8_t *ieee_addr)
 {
+	if(locked) {
+		return;
+	}
+
   GET_LOCK();
   
   write_ram((uint8_t *) &pan, CC2420RAM_PANID, 2, WRITE_RAM_IN_ORDER);
@@ -915,6 +947,239 @@ cc2420_set_pan_addr(unsigned pan,
 /*
  * Interrupt leaves frame intact in FIFO.
  */
+
+#if WITH_SOFTACKS
+/* Struct used to store received frames from interrupt,
+ * to be read later from cc2420_process */
+struct received_frame_s {
+  struct received_frame_s *next;
+  uint8_t buf[CC2420_MAX_PACKET_LEN];
+  uint8_t len;
+  uint8_t acked;
+  uint8_t seqno;
+};
+MEMB(rf_memb, struct received_frame_s, 8);
+LIST(rf_list);
+
+#define RXFIFO_START  0x080
+#define RXFIFO_END    0x0FF
+#define RXFIFO_SIZE   128
+#define RXFIFO_ADDR(index) (RXFIFO_START + (index) % RXFIFO_SIZE)
+
+static softack_input_callback_f *softack_input_callback;
+static softack_acked_callback_f *softack_acked_callback;
+static softack_invalid_frame_callback_f *softack_invalid_frame_callback;
+
+/* Subscribe with three callbacks called from FIFOP interrupt */
+void
+cc2420_softack_subscribe(softack_input_callback_f *input_callback, softack_acked_callback_f *acked_callback, softack_invalid_frame_callback_f *invalid_frame_callback)
+{
+  softack_input_callback = input_callback;
+  softack_acked_callback = acked_callback;
+  softack_invalid_frame_callback = invalid_frame_callback;
+}
+
+int
+cc2420_interrupt(void)
+{
+  uint8_t len, seqno, footer1;
+  uint8_t len_a, len_b;
+  uint8_t *ackbuf, acklen = 0;
+
+	int pass_up_stack = 0;
+  int do_ack = 0;
+  int frame_valid = 0;
+  struct received_frame_s *rf;
+  //printf("*\n");
+  
+  CC2420_CLEAR_FIFOP_INT();
+
+  /* If the lock is taken, we cannot access the FIFO, just drop frame (flush it) */
+     // printf("f %d\n", locked);
+  if(locked) {
+    flushrx();
+    //CC2420_CLEAR_FIFOP_INT();
+    return 1;
+  }
+
+  GET_LOCK();
+
+  if(!CC2420_FIFO_IS_1) {
+    flushrx();
+    RELEASE_LOCK();
+    //CC2420_CLEAR_FIFOP_INT();
+    return 1;
+  }
+
+  /* Read len from FIFO */
+  CC2420_READ_RAM_BYTE(len, RXFIFO_ADDR(0));
+
+  if(len > CC2420_MAX_PACKET_LEN
+      || len <= FOOTER_LEN) {
+    flushrx();
+    RELEASE_LOCK();
+    //CC2420_CLEAR_FIFOP_INT();
+    return 1;
+  }
+
+  /* Allocate space to store the received frame */
+  rf = memb_alloc(&rf_memb);
+
+  if(rf == NULL) {
+    flushrx();
+    RELEASE_LOCK();
+    //CC2420_CLEAR_FIFOP_INT();
+    return 1;
+  }
+
+  last_packet_timestamp = cc2420_sfd_start_time;
+
+  list_add(rf_list, rf);
+
+  len -= FOOTER_LEN;
+  /* len_a: length up to max FIFOP_THRESHOLD */
+  len_a = len > FIFOP_THRESHOLD ? FIFOP_THRESHOLD : len;
+  /* len_b: remaining length */
+  len_b = len - len_a;
+  rf->len = len;
+  rf->acked = 0;
+  read_ram(rf->buf, RXFIFO_ADDR(1), len_a);
+
+  seqno = rf->buf[2];
+  rf->seqno = seqno;
+
+  if(softack_input_callback) {
+    pass_up_stack = softack_input_callback(rf->buf, len_a, &ackbuf, &acklen);
+    do_ack = acklen > 0;
+  }
+
+  if(!pass_up_stack && !do_ack) {
+  	flushrx();
+		RELEASE_LOCK();
+		list_chop(rf_list);
+  	memb_free(&rf_memb, rf);
+		return 1;
+  }
+
+  if(do_ack) {
+	  uint8_t total_acklen = acklen + FOOTER_LEN;
+	  /* Write ack in fifo */
+	  strobe(CC2420_SFLUSHTX);
+	  write_fifo_buf(&total_acklen, 1);
+	  write_fifo_buf(ackbuf, acklen);
+  }
+
+  /* Wait for end of reception */
+  if(last_packet_timestamp == cc2420_sfd_start_time) {
+    while(CC2420_SFD_IS_1);
+  }
+
+  int overflow = CC2420_FIFOP_IS_1 && !CC2420_FIFO_IS_1;
+  CC2420_READ_RAM_BYTE(footer1, RXFIFO_ADDR(len + FOOTER_LEN));
+
+  if(!overflow && (footer1 & FOOTER1_CRC_OK)) { /* CRC is correct */
+    if(do_ack) {
+      strobe(CC2420_STXON); /* Send ACK */
+      rf->acked = 1;
+    }
+    frame_valid = 1;
+    if(pass_up_stack) {
+    	process_poll(&cc2420_process);
+  	} else {
+  		list_chop(rf_list);
+    	memb_free(&rf_memb, rf);
+  	}
+  } else { /* CRC is wrong */
+    if(do_ack) {
+      strobe(CC2420_SFLUSHTX); /* Flush Tx fifo */
+      if(softack_invalid_frame_callback) {
+      	softack_invalid_frame_callback(rf->buf, len_a);
+    	}
+    }
+    list_chop(rf_list);
+    memb_free(&rf_memb, rf);
+  }
+
+  if(frame_valid && do_ack) {
+    if(softack_acked_callback) {
+      softack_acked_callback(rf->buf, len_a);
+    }
+  }
+
+  if(rf && frame_valid && len_b>0) { /* Get rest of the data.
+   No need to read the footer; we already checked it in place
+   before acking. */
+    read_ram(rf->buf + len_a, RXFIFO_ADDR(1 + len_a), len_b);
+  }
+
+  /* Flush rx fifo (because we're doing direct FIFO addressing and
+   * we don't want to lose track of where we are in the FIFO) */
+  flushrx();
+
+  RELEASE_LOCK();
+  return 1;
+}
+int current_is_acked;
+/*---------------------------------------------------------------------------*/
+PROCESS_THREAD(cc2420_process, ev, data)
+{
+  int len;
+  PROCESS_BEGIN();
+
+  PRINTF("cc2420_process: started\n");
+
+  while(1) {
+    PROCESS_YIELD_UNTIL(ev == PROCESS_EVENT_POLL);
+    
+    PRINTF("cc2420_process: calling receiver callback\n");
+
+    packetbuf_clear();
+    packetbuf_set_attr(PACKETBUF_ATTR_TIMESTAMP, last_packet_timestamp);
+    current_is_acked = 0;
+    len = cc2420_read(packetbuf_dataptr(), PACKETBUF_SIZE);
+
+		if(len) {
+			int frame_type = ((uint8_t*)packetbuf_dataptr())[0] & 7;
+			if(frame_type == FRAME802154_ACKFRAME) {
+				continue;
+			}
+			packetbuf_set_datalen(len);
+			packetbuf_set_attr(PACKETBUF_ATTR_ACKED, current_is_acked);
+
+			NETSTACK_RDC.input();
+		}
+  }
+
+  PROCESS_END();
+}
+/*---------------------------------------------------------------------------*/
+static int
+cc2420_read(void *buf, unsigned short bufsize)
+{
+  GET_LOCK();
+  struct received_frame_s *rf = list_pop(rf_list);
+  if(rf == NULL) {
+    RELEASE_LOCK();
+    return 0;
+  } else {
+    if(list_head(rf_list) != NULL) {
+      /* If there are other packets pending, poll */
+      process_poll(&cc2420_process);
+    }
+    int len = rf->len;
+    if(len > bufsize) {
+      memb_free(&rf_memb, rf);
+      RELEASE_LOCK();
+      return 0;
+    }
+    memcpy(buf, rf->buf, len);
+    current_is_acked = rf->acked;
+    memb_free(&rf_memb, rf);
+    RELEASE_LOCK();
+    return len;
+  }
+}
+#else /* WITH_SOFTACKS */
 int
 cc2420_interrupt(void)
 {
@@ -936,13 +1201,11 @@ PROCESS_THREAD(cc2420_process, ev, data)
     PROCESS_YIELD_UNTIL(!poll_mode && ev == PROCESS_EVENT_POLL);
 
     PRINTF("cc2420_process: calling receiver callback\n");
-
     packetbuf_clear();
     packetbuf_set_attr(PACKETBUF_ATTR_TIMESTAMP, last_packet_timestamp);
     len = cc2420_read(packetbuf_dataptr(), PACKETBUF_SIZE);
-    
     packetbuf_set_datalen(len);
-    
+
     NETSTACK_RDC.input();
   }
 
@@ -1001,6 +1264,7 @@ cc2420_read(void *buf, unsigned short bufsize)
         } else {
           /* Another packet has been received and needs attention. */
           process_poll(&cc2420_process);
+          //leds_blink();
         }
       }
     }
@@ -1013,10 +1277,14 @@ cc2420_read(void *buf, unsigned short bufsize)
   RELEASE_LOCK();
   return 0;
 }
+#endif /* WITH_SOFTACKS */
 /*---------------------------------------------------------------------------*/
 void
 cc2420_set_txpower(uint8_t power)
 {
+	if(locked) {
+		return;
+	}
   GET_LOCK();
   set_txpower(power);
   RELEASE_LOCK();
@@ -1074,16 +1342,16 @@ cc2420_cca(void)
     return 1;
   }
 
-  GET_LOCK();
   if(!receive_on) {
     radio_was_off = 1;
     cc2420_on();
+    GET_LOCK();
   }
 
   /* Make sure that the radio really got turned on. */
   if(!receive_on) {
-    RELEASE_LOCK();
     if(radio_was_off) {
+      RELEASE_LOCK();
       cc2420_off();
     }
     return 1;
@@ -1094,9 +1362,9 @@ cc2420_cca(void)
   cca = CC2420_CCA_IS_1;
 
   if(radio_was_off) {
+    RELEASE_LOCK();
     cc2420_off();
   }
-  RELEASE_LOCK();
   return cca;
 }
 /*---------------------------------------------------------------------------*/

@@ -42,8 +42,8 @@
 #include <stdio.h>
 #include "lib/random.h"
 
-#define NUM_PACKETS_TO_SEND 18
-#define DATA_INTERVAL 16
+#define NUM_PACKETS_TO_SEND 300
+#define DATA_INTERVAL 1
 
 struct message {
 	uint16_t seqno;
@@ -95,10 +95,8 @@ PROCESS_THREAD(example_unicast_process, ev, data)
   while(1) {
     static uint16_t message_count = 0;
     static struct message msg;
-    
     PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&et));
-    uint16_t rand = random_rand() % CLOCK_SECOND;
-
+    volatile uint16_t rand = random_rand() % CLOCK_SECOND;
     etimer_set(&et, CLOCK_SECOND * DATA_INTERVAL - CLOCK_SECOND/2 + rand);
     
     if(i_am_sender) {

@@ -47,7 +47,7 @@
 #include <string.h>
 
 #define UDP_PORT 1234
-#define SERVICE_ID 190
+#define SERVICE_ID_BASE 190
 
 #define SEND_INTERVAL		(10 * CLOCK_SECOND)
 #define SEND_TIME		(random_rand() % (SEND_INTERVAL))
@@ -67,6 +67,7 @@ receiver(struct simple_udp_connection *c,
          const uint8_t *data,
          uint16_t datalen)
 {
+	printf("RECEIVE\n");
   printf("Data received from ");
   uip_debug_ipaddr_print(sender_addr);
   printf(" on port %d from port %d with length %d: '%s'\n",
@@ -120,16 +121,20 @@ create_rpl_dag(uip_ipaddr_t *ipaddr)
 PROCESS_THREAD(unicast_receiver_process, ev, data)
 {
   uip_ipaddr_t *ipaddr;
+  uint8_t service_id;
 
   PROCESS_BEGIN();
 
-  servreg_hack_init();
+  //servreg_hack_init();
 
   ipaddr = set_global_address();
 
-  create_rpl_dag(ipaddr);
+  //create_rpl_dag(ipaddr);
+  
+  service_id = SERVICE_ID_BASE + uip_lladdr.addr[7];
+  printf("Service ID: %d\n", service_id);
 
-  servreg_hack_register(SERVICE_ID, ipaddr);
+  //servreg_hack_register(service_id, &uip_ds6_get_link_local(1)->ipaddr);
 
   simple_udp_register(&unicast_connection, UDP_PORT,
                       NULL, UDP_PORT, receiver);

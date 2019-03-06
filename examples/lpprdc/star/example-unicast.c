@@ -43,6 +43,7 @@
 #include "lib/random.h"
 
 #define NUM_PACKETS_TO_SEND 300
+#define DATA_INTERVAL 1
 
 struct message {
 	uint16_t seqno;
@@ -98,7 +99,7 @@ PROCESS_THREAD(example_unicast_process, ev, data)
     PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&et));
     uint16_t rand = random_rand() % CLOCK_SECOND;
 
-    etimer_set(&et, CLOCK_SECOND/2 + rand);
+    etimer_set(&et, CLOCK_SECOND * DATA_INTERVAL - CLOCK_SECOND/2 + rand);
     
     if(i_am_sender) {
 		  if(message_count++ < NUM_PACKETS_TO_SEND) {

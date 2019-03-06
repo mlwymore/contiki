@@ -85,6 +85,7 @@ typedef uint16_t rpl_ocp_t;
 /* IANA Objective Code Point as defined in RFC6550 */
 #define RPL_OCP_OF0     0
 #define RPL_OCP_MRHOF   1
+#define RPL_OCP_EEP     2
 
 struct rpl_metric_object_energy {
   uint8_t flags;
@@ -101,6 +102,7 @@ struct rpl_metric_container {
   union metric_object {
     struct rpl_metric_object_energy energy;
     uint16_t etx;
+    uint16_t eep;
   } obj;
 };
 typedef struct rpl_metric_container rpl_metric_container_t;
@@ -121,6 +123,14 @@ struct rpl_parent {
   uint8_t flags;
 };
 typedef struct rpl_parent rpl_parent_t;
+
+#if RPL_CONF_OPP_ROUTING
+struct rpl_forwarder_set_member {
+  void *next;
+  rpl_parent_t *forwarder;
+};
+typedef struct rpl_forwarder_set_member rpl_forwarder_set_member_t;
+#endif
 /*---------------------------------------------------------------------------*/
 /* RPL DIO prefix suboption */
 struct rpl_prefix {
@@ -210,6 +220,9 @@ struct rpl_of {
   rpl_parent_t *(*best_parent)(rpl_parent_t *, rpl_parent_t *);
   rpl_dag_t *(*best_dag)(rpl_dag_t *, rpl_dag_t *);
   void (*update_metric_container)( rpl_instance_t *);
+#if RPL_CONF_OPP_ROUTING
+  rpl_rank_t (*rank_via_set)(rpl_forwarder_set_member_t *);
+#endif
   rpl_ocp_t ocp;
 };
 typedef struct rpl_of rpl_of_t;
@@ -293,6 +306,12 @@ uip_ds6_nbr_t *rpl_get_nbr(rpl_parent_t *parent);
 void rpl_print_neighbor_list(void);
 int rpl_process_srh_header(void);
 int rpl_srh_get_next_hop(uip_ipaddr_t *ipaddr);
+
+#if RPL_CONF_OPP_ROUTING
+/* Returns 1 if the address is in the forwarder set, 0 if not */
+uint8_t rpl_node_in_forwarder_set(const linkaddr_t *lladdr);
+uint8_t rpl_is_addr_opp(uip_ipaddr_t *destipaddr);
+#endif
 
 /* Per-parent RPL information */
 NBR_TABLE_DECLARE(rpl_parents);

@@ -92,4 +92,14 @@ void cc2420_set_cca_threshold(int value);
 
 extern const struct aes_128_driver cc2420_aes_128_driver;
 
+/* Soft ack code from Simon Duquennoy's ORPL implementation */
+#if WITH_SOFTACKS
+typedef uint8_t(softack_input_callback_f)(const uint8_t *frame, uint8_t framelen, uint8_t **ackbufptr, uint8_t *acklen);
+typedef void(softack_acked_callback_f)(const uint8_t *frame, uint8_t framelen);
+typedef void(softack_invalid_frame_callback_f)(const uint8_t *frame, uint8_t framelen);
+
+/* Subscribe with two callbacks called from FIFOP interrupt */
+void cc2420_softack_subscribe(softack_input_callback_f *input_callback, softack_acked_callback_f *acked_callback, softack_invalid_frame_callback_f *invalid_frame_callback);
+#endif
+
 #endif /* CC2420_H_ */

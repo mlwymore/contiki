@@ -92,6 +92,7 @@ void
 rtimer_unset(void)
 {
   next_rtimer = NULL;
+  rtimer_arch_cancel();
 }
 /*---------------------------------------------------------------------------*/
 void

@@ -133,3 +133,5 @@ LOG_OPENOCD
 
 *.dat.*
 *.dat_*
+
+*cooja-results*

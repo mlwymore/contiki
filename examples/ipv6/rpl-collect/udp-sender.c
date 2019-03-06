@@ -130,6 +130,7 @@ collect_common_send(void)
   dag = rpl_get_any_dag();
   if(dag != NULL) {
     preferred_parent = dag->preferred_parent;
+    //printf("preferred parent: %d\n", preferred_parent);
     if(preferred_parent != NULL) {
       uip_ds6_nbr_t *nbr;
       nbr = uip_ds6_nbr_lookup(rpl_get_parent_ipaddr(preferred_parent));
@@ -153,7 +154,7 @@ collect_common_send(void)
   collect_view_construct_message(&msg.msg, &parent,
                                  parent_etx, rtmetric,
                                  num_neighbors, beacon_interval);
-
+  PRINTF("SEND %u\n", msg.seqno);
   uip_udp_packet_sendto(client_conn, &msg, sizeof(msg),
                         &server_ipaddr, UIP_HTONS(UDP_SERVER_PORT));
 }

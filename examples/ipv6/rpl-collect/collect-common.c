@@ -41,6 +41,7 @@
 #include "dev/serial-line.h"
 #include "dev/leds.h"
 #include "collect-common.h"
+#include "net/rpl/rpl.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -48,11 +49,16 @@
 
 static unsigned long time_offset;
 static int send_active = 1;
+static unsigned long num_packets_sent = 0;
+
+#define BOOTUP_DELAY 90
 
 #ifndef PERIOD
-#define PERIOD 60
+#define PERIOD 15
 #endif
-#define RANDWAIT (PERIOD)
+#define RANDWAIT (1)
+
+#define NUM_PACKETS_TO_SEND 40
 
 /*---------------------------------------------------------------------------*/
 PROCESS(collect_common_process, "collect common process");
@@ -88,7 +94,7 @@ collect_common_recv(const linkaddr_t *originator, uint8_t seqno, uint8_t hops,
   uint16_t data;
   int i;
 
-  printf("%u", 8 + payload_len / 2);
+  printf("RECEIVE %u", 8 + payload_len / 2);
   /* Timestamp. Ignore time synch for now. */
   time = get_time();
   printf(" %lu %lu 0", ((time >> 16) & 0xffff), time & 0xffff);
@@ -111,7 +117,10 @@ PROCESS_THREAD(collect_common_process, ev, data)
 
   collect_common_net_init();
 
-  /* Send a packet every 60-62 seconds. */
+  printf("STARTING COLLECT COMMON PROCESS WITH PERIOD %d\n", PERIOD);
+
+  etimer_set(&period_timer, CLOCK_SECOND * BOOTUP_DELAY + random_rand() % (CLOCK_SECOND * PERIOD));
+  PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_TIMER);
   etimer_set(&period_timer, CLOCK_SECOND * PERIOD);
   while(1) {
     PROCESS_WAIT_EVENT();
@@ -161,6 +170,12 @@ PROCESS_THREAD(collect_common_process, ev, data)
         if(send_active) {
           /* Time to send the data */
           collect_common_send();
+          num_packets_sent++;
+          if(num_packets_sent >= NUM_PACKETS_TO_SEND) {
+            collect_common_set_send_active(0);
+            printf("DONE\n");
+            rpl_print_neighbor_list();
+          }
         }
       }
     }

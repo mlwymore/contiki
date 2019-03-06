@@ -57,7 +57,7 @@ AUTOSTART_PROCESSES(&radio_test_process);
 #define ON  1
 #define OFF 0
 
-#define HEADER "RTST"
+#define HEADER "RTST1"
 #define PACKET_SIZE 20
 #define PORT 9345
 
