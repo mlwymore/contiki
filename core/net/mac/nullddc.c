@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, Swedish Institute of Computer Science.
+ * Copyright (c) 2009, Swedish Institute of Computer Science.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,27 +26,65 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * This file is part of the Contiki operating system.
- *
  */
 
 /**
  * \file
- *         Initialiation file for the Contiki low-layer network stack (NETSTACK)
+ *         Null DDC framer. 
  * \author
- *         Adam Dunkels <adam@sics.se>
+ *         Mat Wymore <mlwymore@iastate.edu>
  */
 
-#include "net/netstack.h"
+#include "contiki.h"
+#include "net/mac/ddc.h"
+
+#define DEBUG 0
+
+#if DEBUG
+#include <stdio.h>
+#define PRINTF(...) printf(__VA_ARGS__)
+#define PRINTADDR(addr) PRINTF(" %02x%02x:%02x%02x:%02x%02x:%02x%02x ", ((uint8_t *)addr)[0], ((uint8_t *)addr)[1], ((uint8_t *)addr)[2], ((uint8_t *)addr)[3], ((uint8_t *)addr)[4], ((uint8_t *)addr)[5], ((uint8_t *)addr)[6], ((uint8_t *)addr)[7])
+#else
+#define PRINTF(...)
+#define PRINTADDR(addr)
+#endif
+
+
 /*---------------------------------------------------------------------------*/
-void
-netstack_init(void)
+static int
+init(void)
 {
-  NETSTACK_RADIO.init();
-  NETSTACK_RDC.init();
-  NETSTACK_LLSEC.init();
-  NETSTACK_DDC.init();
-  NETSTACK_MAC.init();
-  NETSTACK_NETWORK.init();
+  return 1;
 }
 /*---------------------------------------------------------------------------*/
+static int
+use_ddc(void)
+{
+	return 0;
+}
+/*---------------------------------------------------------------------------*/
+static int
+multiplier(void)
+{
+	return 0;
+}
+/*---------------------------------------------------------------------------*/
+static int
+divisor(void)
+{
+	return 1;
+}
+/*---------------------------------------------------------------------------*/
+static int
+input(void)
+{
+	return 1;
+}
+/*---------------------------------------------------------------------------*/
+const struct ddc_driver nullddc_driver = {
+  init,
+  use_ddc,
+  multiplier,
+  divisor,
+  input
+};

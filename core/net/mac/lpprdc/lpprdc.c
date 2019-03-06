@@ -429,6 +429,9 @@ PROCESS_THREAD(lpprdc_probe_process, ev, data)
     rand -= (probe_interval / NETSTACK_RDC_CHANNEL_CHECK_RANDOMNESS_FRACTION) / 2;
     uint32_t probe_interval_rand = (uint32_t)probe_interval + rand;
     ctimer_set(&probe_timer, probe_interval_rand, powercycle_ctimer_wrapper, NULL);
+    if(NETSTACK_DDC.use_ddc()) {
+    	probe_interval = CLOCK_SECOND * NETSTACK_DDC.multiplier() / NETSTACK_DDC.divisor();
+    }
     PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_CONTINUE);
   }
 
@@ -871,7 +874,6 @@ input_packet(void)
       /* This is a regular packet that is destined to us or to the
          broadcast address. */
 
-
 #if CONTIKIMAC_CONF_COMPOWER
       /* Accumulate the power consumption for the packet reception. */
       compower_accumulate(&current_packet);
@@ -895,9 +897,11 @@ input_packet(void)
 		    PRINTF("dupe\n");
 		  } else {
 		    mac_sequence_register_seqno();
+		    NETSTACK_DDC.input();
 		  	NETSTACK_MAC.input();
 		  }
 #else
+			NETSTACK_DDC.input();
 			NETSTACK_MAC.input();
 #endif /* RDC_WITH_DUPLICATE_DETECTION */
 
@@ -1316,7 +1320,13 @@ init(void)
   packetbuf_copyto(ackbuf);
 
   probe_rate = NETSTACK_RDC_CHANNEL_CHECK_RATE;
-  probe_interval = CLOCK_SECOND / probe_rate;
+  
+  if(NETSTACK_DDC.use_ddc()) {
+  	probe_interval = CLOCK_SECOND * NETSTACK_DDC.multiplier() / NETSTACK_DDC.divisor();
+  } else {
+  	probe_interval = CLOCK_SECOND / probe_rate;
+  }
+  //TODO: add another config option for max - or get from DDC?
   ctimer_max_probe_interval = probe_interval + probe_interval / NETSTACK_RDC_CHANNEL_CHECK_RANDOMNESS_FRACTION;
   max_probe_interval = RTIMER_ARCH_SECOND / CLOCK_SECOND * ctimer_max_probe_interval;
 #ifdef SLEEP_RANGE
@@ -1359,8 +1369,12 @@ turn_off(int keep_radio_on)
 static unsigned short
 channel_check_interval(void)
 {
-  /* This is called by CSMA to set the backoff length */
-  return (1ul * CLOCK_SECOND / probe_rate);
+	/* This is called by CSMA to set the backoff length */
+	if(NETSTACK_DDC.use_ddc()) {
+		return (1ul * CLOCK_SECOND * NETSTACK_DDC.multiplier() / NETSTACK_DDC.divisor());
+	} else {
+  	return (1ul * CLOCK_SECOND / probe_rate);
+  }
 }
 /*---------------------------------------------------------------------------*/
 const struct rdc_driver lpprdc_driver = {

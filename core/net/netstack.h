@@ -105,10 +105,19 @@
 #endif /* NETSTACK_CONF_FRAMER */
 #endif /* NETSTACK_FRAMER */
 
+#ifndef NETSTACK_DDC
+#ifdef NETSTACK_CONF_DDC
+#define NETSTACK_DDC NETSTACK_CONF_DDC
+#else /* NETSTACK_CONF_DDC */
+#define NETSTACK_DDC   nullddc_driver
+#endif /* NETSTACK_CONF_DDC */
+#endif /* NETSTACK_DDC */
+
 #include "net/llsec/llsec.h"
 #include "net/mac/mac.h"
 #include "net/mac/rdc.h"
 #include "net/mac/framer.h"
+#include "net/mac/ddc.h"
 #include "dev/radio.h"
 
 /**
@@ -130,6 +139,7 @@ extern const struct rdc_driver     NETSTACK_RDC;
 extern const struct mac_driver     NETSTACK_MAC;
 extern const struct radio_driver   NETSTACK_RADIO;
 extern const struct framer         NETSTACK_FRAMER;
+extern const struct ddc_driver     NETSTACK_DDC;
 
 void netstack_init(void);
 

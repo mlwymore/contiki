@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, Swedish Institute of Computer Science.
+ * Copyright (c) 2009, Swedish Institute of Computer Science.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,27 +26,27 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * This file is part of the Contiki operating system.
- *
  */
 
 /**
  * \file
- *         Initialiation file for the Contiki low-layer network stack (NETSTACK)
+ *         A MAC dynamic duty cycling (DDC) scheme is responsible for deciding
+ *         how long to wait between wakeups.
  * \author
- *         Adam Dunkels <adam@sics.se>
+ *         Mat Wymore <mlwymore@iastate.edu>
  */
 
-#include "net/netstack.h"
-/*---------------------------------------------------------------------------*/
-void
-netstack_init(void)
-{
-  NETSTACK_RADIO.init();
-  NETSTACK_RDC.init();
-  NETSTACK_LLSEC.init();
-  NETSTACK_DDC.init();
-  NETSTACK_MAC.init();
-  NETSTACK_NETWORK.init();
-}
-/*---------------------------------------------------------------------------*/
+#ifndef DDC_H_
+#define DDC_H_
+
+struct ddc_driver {
+
+  int (* init)(void);
+  int (* use_ddc)(void);
+  int (* multiplier)(void);
+  int (* divisor)(void);
+  int (* input)(void);
+
+};
+
+#endif /* DDC_H_ */
