@@ -181,21 +181,22 @@
     org.contikios.cooja.plugins.ScriptRunner
     <plugin_config>
       <script>/* Begin script */
-TIMEOUT(613000, log.append(filename, mote.getSimulation().getCooja().getStartedPlugin("PowerTracker").radioStatistics());)
+TIMEOUT(361000, log.append(filename, mote.getSimulation().getCooja().getStartedPlugin("PowerTracker").radioStatistics());)
 
 filename = "/home/user/git/contiki/examples/lpprdc/star/cooja-results/" + 
     mote.getSimulation().getTitle() +
     "-df1" +
-    "-dai1" +
+    "-dai10" +
     "-tx75" +
-    "-rdccontikimac" +
+    "-rdclpprdc" +
+    "-ddccollisionddc" +
     "-opp0" +
     "-ccr2" +
     "-tbi100-" +
     mote.getSimulation().getRandomSeed() + ".txt";
 
 numSenders = 3;
-numPackets = 300;
+numPackets = 30;
 packetCount = 0;
 
 t = mote.getSimulation().getSimulationTime();

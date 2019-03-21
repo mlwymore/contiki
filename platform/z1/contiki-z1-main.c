@@ -316,10 +316,11 @@ main(int argc, char **argv)
   /* Setup X-MAC for 802.15.4 */
   queuebuf_init();
 
-  NETSTACK_RDC.init();
-  NETSTACK_MAC.init();
-  NETSTACK_LLSEC.init();
-  NETSTACK_NETWORK.init();
+	netstack_init();
+//  NETSTACK_RDC.init();
+//  NETSTACK_MAC.init();
+//  NETSTACK_LLSEC.init();
+//  NETSTACK_NETWORK.init();
 
   printf("%s %s %s, channel check rate %lu Hz, radio channel %u\n",
          NETSTACK_LLSEC.name, NETSTACK_MAC.name, NETSTACK_RDC.name,
@@ -358,10 +359,11 @@ main(int argc, char **argv)
 
 #else /* NETSTACK_CONF_WITH_IPV6 */
 
-  NETSTACK_RDC.init();
-  NETSTACK_MAC.init();
-  NETSTACK_LLSEC.init();
-  NETSTACK_NETWORK.init();
+	netstack_init();
+  //NETSTACK_RDC.init();
+  //NETSTACK_MAC.init();
+  //NETSTACK_LLSEC.init();
+  //NETSTACK_NETWORK.init();
 
   printf("%s %s %s, channel check rate %lu Hz, radio channel %u\n",
          NETSTACK_LLSEC.name, NETSTACK_MAC.name, NETSTACK_RDC.name,

@@ -14,15 +14,16 @@ CSC_LIST=("$AUX_DIRECTORY/unicast-example-z1-1.csc" "$AUX_DIRECTORY/unicast-exam
 #CSC_LIST=("$AUX_DIRECTORY/unicast-example-z1-4.csc")
 PROJ_CONF_DIR=$AUX_DIRECTORY
 PROJ_CONF_LIST=("project-conf.h")
-PROTOCOL_LIST=("lpprdc" "rimac" "contikimac")
-CCR_LIST=(2 2 2)
-OPP_CONF_LIST=(0 0 0)
-TBI_LIST=(100 100 100)
+PROTOCOL_LIST=("lpprdc" "lpprdc")
+DDC_LIST=("nullddc" "collisionddc") 
+CCR_LIST=(2 2)
+OPP_CONF_LIST=(0 0)
+TBI_LIST=(100 100)
 #PROTOCOL_LIST=("lpprdc")
 #CCR_LIST=(2)
 #OPP_CONF_LIST=(0)
 #TBI_LIST=(125)
-DAI_LIST=(1)
+DAI_LIST=(1 10)
 MAKEFILE="$AUX_DIRECTORY/Makefile"
 
 if [ ! -d "$RESULTS_DIRECTORY" ]; then
@@ -31,7 +32,7 @@ fi
 
 #rm $RESULTS_DIRECTORY/*.txt
 
-NUMRUNS=15
+NUMRUNS=1
 
 BOOTTIME=10
 
@@ -82,6 +83,7 @@ for DAI in "${DAI_LIST[@]}"; do
 			#	sed -i 's/"-rdc.*/"-rdc'${PROTOCOL_LIST[$INDEX]}'-" +/' ${CSC_LIST[0]}
 			for INDEX in "${!PROTOCOL_LIST[@]}"; do
 				PROTOCOL=${PROTOCOL_LIST[$INDEX]}
+				DDC=${DDC_LIST[$INDEX]}
 				OPP_CONF=${OPP_CONF_LIST[$INDEX]}
 				CHANNEL_CHECK_RATE=${CCR_LIST[$INDEX]}
 				TBI=${TBI_LIST[$INDEX]}
@@ -92,8 +94,10 @@ for DAI in "${DAI_LIST[@]}"; do
 			          
 			  sed -i 's/"-ccr.*/"-ccr'$CHANNEL_CHECK_RATE'" +/' $CSC
 				sed -i 's/"-rdc.*/"-rdc'$PROTOCOL'" +/' $CSC
+				sed -i 's/"-ddc.*/"-ddc'$DDC'" +/' $CSC
 				sed -i 's/"-tbi.*/"-tbi'$TBI'-" +/' $CSC
 				sed -i 's/#define NETSTACK_CONF_RDC .*/#define NETSTACK_CONF_RDC '$PROTOCOL'_driver/' $PROJ_CONF_DIR/${PROJ_CONF_LIST[0]}
+				sed -i 's/#define NETSTACK_CONF_DDC .*/#define NETSTACK_CONF_DDC '$DDC'_driver/' $PROJ_CONF_DIR/${PROJ_CONF_LIST[0]}
 				if [ "$PROTOCOL" == "contikimac" ]; then
 					sed -i 's/#define NETSTACK_CONF_FRAMER .*/#define NETSTACK_CONF_FRAMER '$PROTOCOL'_framer/' $PROJ_CONF_DIR/${PROJ_CONF_LIST[0]}
 					sed -i 's/#define WITH_SOFTACKS.*/#define WITH_SOFTACKS 0/' $PROJ_CONF_DIR/${PROJ_CONF_LIST[0]}

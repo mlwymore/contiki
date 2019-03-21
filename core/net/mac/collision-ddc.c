@@ -30,12 +30,13 @@
 
 /**
  * \file
- *         Null DDC framer. 
+ *         Collision-based dynamic duty cycling. 
  * \author
  *         Mat Wymore <mlwymore@iastate.edu>
  */
 
 #include "contiki.h"
+#include "sys/clock.h"
 #include "net/mac/ddc.h"
 
 #define DEBUG 1
@@ -49,57 +50,113 @@
 #define PRINTADDR(addr)
 #endif
 
+#ifdef DDC_CONF_MAX_MULT
+#define DDC_MAX_MULT DDC_CONF_MAX_MULT
+#else
+#define DDC_MAX_MULT 32
+#endif
+
+#define DDC_MIN_DIV 1
+#define DDC_MAX_DIV 16
+
+int mult;
+int div;
 
 /*---------------------------------------------------------------------------*/
 static int
 init(void)
 {
-	PRINTF("DDC: Using null-DDC.\n");
+	PRINTF("DDC: Using Collision-DDC.\n");
+	mult = 1;
+	div = 1;
   return 1;
 }
 /*---------------------------------------------------------------------------*/
 static int
 use_ddc(void)
 {
-	return 0;
+	return 1;
 }
 /*---------------------------------------------------------------------------*/
 static int
 multiplier(void)
 {
-	return 0;
+	//PRINTF("DDC: mult %d\n", mult);
+	return mult;
 }
 /*---------------------------------------------------------------------------*/
 static int
 divisor(void)
 {
+	//PRINTF("DDC: div %d\n", div);
+	return div;
+}
+/*---------------------------------------------------------------------------*/
+static void
+check_limits(void)
+{
+	mult = MIN(mult, DDC_MAX_MULT);
+	div = MIN(div, DDC_MAX_DIV);
+}
+/*---------------------------------------------------------------------------*/
+static int
+increase_interval(void)
+{
+	if(mult > 1 || (mult == 1 && div == 1)) {
+		mult = mult * 2;
+	} else {
+		div = div / 2;
+	}
+	check_limits();
+	PRINTF("DDC: Increasing interval. Div: %d, Mult: %d\n", div, mult);
+	return 1;
+}
+/*---------------------------------------------------------------------------*/
+static int
+decrease_interval(void)
+{
+	if(mult > 1) {
+		mult = mult / 2;
+	} else {
+		div = div * 2;
+	}
+	check_limits();
+	PRINTF("DDC: Decreasing interval. Div: %d, Mult: %d\n", div, mult);
 	return 1;
 }
 /*---------------------------------------------------------------------------*/
 static int
 input(void)
 {
+	/*static clock_time_t last_input_clock = 0;
+	clock_time_t current_clock = clock_time();
+	if(current_clock - last_input_clock < CLOCK_SECOND * mult / div / 2) {
+		decrease_interval();
+	}
+	last_input_clock = current_clock;*/
 	return 1;
 }
 /*---------------------------------------------------------------------------*/
 static int
 collision(void)
 {
+	decrease_interval();
 	return 1;
 }
 /*---------------------------------------------------------------------------*/
 static int
 empty_wakeup(void)
 {
+	increase_interval();
 	return 1;
 }
 /*---------------------------------------------------------------------------*/
-const struct ddc_driver nullddc_driver = {
+const struct ddc_driver collisionddc_driver = {
   init,
   use_ddc,
   multiplier,
   divisor,
   input,
   collision,
-  empty_wakeup
+  empty_wakeup,
 };

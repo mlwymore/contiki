@@ -331,6 +331,9 @@ PROCESS_THREAD(lpprdc_probe_process, ev, data)
   PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_CONTINUE);
 
   while(1) {
+    uint8_t collisions = 0;
+  	uint8_t packets = 0;
+  	
     if(!we_are_sending) {
       //Prep the initial probe. Backoff value is number of probes remaining in train. Starts with 0.
       
@@ -386,6 +389,7 @@ PROCESS_THREAD(lpprdc_probe_process, ev, data)
 
           if(we_are_probing && !waiting_for_response) {
             /* we sent an ack */
+            packets++;
             send_probe = 0;
 #if LPPRDC_RESET_BACKOFF_ON_ACK
             if(current_backoff_window > 0) {
@@ -413,6 +417,9 @@ PROCESS_THREAD(lpprdc_probe_process, ev, data)
               while(!NETSTACK_RADIO.channel_clear()) { }
               send_probe = 1;
             }
+            
+            collisions++;
+            //NETSTACK_DDC.collision();
           } else if(we_are_probing) {
             send_probe = 1;
           } else {
@@ -425,13 +432,19 @@ PROCESS_THREAD(lpprdc_probe_process, ev, data)
     }
     current_backoff_window = 0;
     we_are_probing = 0;
+    if(NETSTACK_DDC.use_ddc()) {
+    	if(collisions) {
+    		NETSTACK_DDC.collision();
+    	}
+    	if(!packets) {
+    		NETSTACK_DDC.empty_wakeup();
+    	}
+    	probe_interval = CLOCK_SECOND * NETSTACK_DDC.multiplier() / NETSTACK_DDC.divisor();
+    }
     int32_t rand = random_rand() % (probe_interval / NETSTACK_RDC_CHANNEL_CHECK_RANDOMNESS_FRACTION);
     rand -= (probe_interval / NETSTACK_RDC_CHANNEL_CHECK_RANDOMNESS_FRACTION) / 2;
     uint32_t probe_interval_rand = (uint32_t)probe_interval + rand;
     ctimer_set(&probe_timer, probe_interval_rand, powercycle_ctimer_wrapper, NULL);
-    if(NETSTACK_DDC.use_ddc()) {
-    	probe_interval = CLOCK_SECOND * NETSTACK_DDC.multiplier() / NETSTACK_DDC.divisor();
-    }
     PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_CONTINUE);
   }
 

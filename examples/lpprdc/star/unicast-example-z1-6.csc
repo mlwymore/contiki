@@ -246,6 +246,7 @@ filename = "/home/user/git/contiki/examples/lpprdc/star/cooja-results/" +
     "-dai1" +
     "-tx100" +
     "-rdclpprdc" +
+    "-ddcnullddc" +
     "-opp0" +
     "-ccr2" +
     "-tbi125-" +

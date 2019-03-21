@@ -42,7 +42,7 @@
 #include <stdio.h>
 #include "lib/random.h"
 
-#define NUM_PACKETS_TO_SEND 300
+#define NUM_PACKETS_TO_SEND 30
 #define DATA_INTERVAL 1
 
 struct message {

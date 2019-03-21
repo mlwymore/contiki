@@ -46,6 +46,8 @@ struct ddc_driver {
   int (* multiplier)(void);
   int (* divisor)(void);
   int (* input)(void);
+  int (* collision)(void);
+  int (* empty_wakeup)(void);
 
 };
 

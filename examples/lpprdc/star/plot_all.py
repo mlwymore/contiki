@@ -14,6 +14,7 @@ print('Plotting from files %s.' % args.fileNames)
 
 ccrs = set()
 prots = set()
+ddcs = set()
 dais = set()
 txs = set()
 flows = set()
@@ -30,6 +31,9 @@ for fileName in args.fileNames:
 	if rdc:
 		prot = rdc.replace('rdc', '', 1)
 		prots.add(prot)
+	ddc = [w for w in fileName.split('-') if w.find('ddc') == 0][0]
+	if ddc:
+		ddcs.add(ddc.replace('ddc', '', 1))
 	ind = fileName.find('dai')
 	if ind >= 0:
 		try:
@@ -69,6 +73,8 @@ ccrs = sorted(list(ccrs))
 print(ccrs)
 prots = sorted(list(prots))
 print(prots)
+ddcs = sorted(list(ddcs))
+print(ddcs)
 dais = sorted(list(dais))
 print(dais)
 txs = sorted(list(txs))
@@ -81,29 +87,37 @@ print(tbis)
 plot_delay = args.withDelay
 
 series = {
-	('lpprdc', 2, 100): {
-		'color':'red',
+	('lpprdc', 'nullddc', 2, 100): {
+		'color':'blue',
 		'marker':'o',
 		'ls':'solid',
 		'label':'RIVER-MAC',
-		'z':5
-	},
-	
-	('rimac', 2, 100): {
-		'color':'blue',
-		'marker':'^',
-		'ls':'dashed',
-		'label':'RI-MAC',
 		'z':4
 	},
 	
-	('contikimac', 2, 100): {
-		'color':'green',
-		'marker':'s',
-		'ls':'-.',
-		'label':'ContikiMAC',
-		'z':3
+	('lpprdc', 'collisionddc', 2, 100): {
+		'color':'red',
+		'marker':'^',
+		'ls':'dashed',
+		'label':'RIVER-MAC w/ Collision-DDC',
+		'z':5
 	},
+	
+#	('rimac', 2, 100): {
+#		'color':'blue',
+#		'marker':'^',
+#		'ls':'dashed',
+#		'label':'RI-MAC',
+#		'z':4
+#	},
+	
+#	('contikimac', 2, 100): {
+#		'color':'green',
+#		'marker':'s',
+#		'ls':'-.',
+#		'label':'ContikiMAC',
+#		'z':3
+#	},
 	
 #	('contikimac', 8, 100): {
 #		'color':'yellow'
@@ -162,6 +176,7 @@ series = {
 configs = [
 #					 ('flows', flows, 1, 'all', 'x', 100, 125, 'Number of flows'),
 					 ('flows', flows, 1, 'all', 'x', 75, 'all', 'Number of senders'),
+					 ('flows', flows, 10, 'all', 'x', 75, 'all', 'Number of senders'),
 #					 ('tbi', tbis, 1, 'all', 1, 100, 'x', 'Size of initial beacon (bytes)'),
 #					 ('tbi', tbis, 1, 'all', 2, 100, 'x', 'Size of initial beacon (bytes)'),
 #					 ('tbi', tbis, 1, 'all', 3, 100, 'x', 'Size of initial beacon (bytes)'),
@@ -191,147 +206,149 @@ for config in configs:
 	xlabel = config[7]
 	
 	for prot in prots:
+		for ddc in ddcs:
 		
-		if ccr == 'all':
-			pccrs = ccrs
-		else:
-			pccrs = [ccr]
-			
-		if tbi == 'all':
-			ptbis = tbis
-		else:
-			ptbis = [tbi]
-		
-		for ptbi in ptbis:
-			for pccr in [p for p in pccrs if (prot, p, ptbi) in series]:
-				pdrdata[(prot, pccr, ptbi)] = ([], [], [], [], [])
-				senderdcdata[(prot, pccr, ptbi)] = ([], [], [], [])
-				recvrdcdata[(prot, pccr, ptbi)] = ([], [], [], [])
-				delaydata[(prot, pccr, ptbi)] = ([], [], [], [])
-			
-				for x in xs:
-					pdrs = []
-					recs = []
-					numMotes = 0
-					senderdcs = []
-					recvrdcs = []
-					avgdelays = []
+			if ccr == 'all':
+				pccrs = ccrs
+			else:
+				pccrs = [ccr]
 				
-					for fileName in [f for f in args.fileNames if 'rdc%s-' % prot in f and
-														('ccr%d-' % pccr in f) and
-														('lpprdc' not in f or (ptbi == 'x' and 'tbi%d-' % x in f) or (ptbi != 'x' and 'tbi%d-' % ptbi in f)) and
-														((txr == 'x' and 'txr%d-' % x in f) or (txr != 'x' and 'tx%d-' % txr in f)) and
-														((dai == 'x' and 'dai%s-' % x in f) or (dai != 'x' and 'dai%s-' % dai in f)) and
-														((flow == 'x' and 'flows%d' % x in f) or (flow != 'x' and 'flows%d' % flow in f))]:
+			if tbi == 'all':
+				ptbis = tbis
+			else:
+				ptbis = [tbi]
+			
+			for ptbi in ptbis:
+				for pccr in [p for p in pccrs if (prot, ddc, p, ptbi) in series]:
+					pdrdata[(prot, ddc, pccr, ptbi)] = ([], [], [], [], [])
+					senderdcdata[(prot, ddc, pccr, ptbi)] = ([], [], [], [])
+					recvrdcdata[(prot, ddc, pccr, ptbi)] = ([], [], [], [])
+					delaydata[(prot, ddc, pccr, ptbi)] = ([], [], [], [])
+				
+					for x in xs:
+						pdrs = []
+						recs = []
+						numMotes = 0
+						senderdcs = []
+						recvrdcs = []
+						avgdelays = []
+					
+						for fileName in [f for f in args.fileNames if 'rdc%s-' % prot in f and
+															'ddc%s-' % ddc in f and
+															('ccr%d-' % pccr in f) and
+															('lpprdc' not in f or (ptbi == 'x' and 'tbi%d-' % x in f) or (ptbi != 'x' and 'tbi%d-' % ptbi in f)) and
+															((txr == 'x' and 'txr%d-' % x in f) or (txr != 'x' and 'tx%d-' % txr in f)) and
+															((dai == 'x' and 'dai%s-' % x in f) or (dai != 'x' and 'dai%s-' % dai in f)) and
+															((flow == 'x' and 'flows%d' % x in f) or (flow != 'x' and 'flows%d' % flow in f))]:
 
-						#pdr stuff
-						with open(fileName) as infile:
-							sent = len([l for l in infile if 'SEND' in l])
-							
-						with open(fileName) as infile:
-							delivered = len([l for l in infile if 'RECEIVE' in l])
-							
-						pdrs.append(float(delivered) / float(sent))
-						if flow != 'x':
-							recs.append(float(delivered) / float(flow))
-						else:
-							recs.append(float(delivered) / float(x))
-						
-						#duty cycle stuff
-						with open(fileName) as infile:
-							onLines = [l.rstrip() for l in infile if ' ON ' in l]
-							
-						if not onLines:
-							print('No onlines for %s' % fileName)
-							continue
-						
-						if numMotes == 0:
-							words = onLines[-1].split()
-							words = words[0].split('_')
-							numMotes = int(words[1])
-						onLines = onLines[-numMotes:]
-						#onLines = onLines[1:numMotes]
-						sendervals = []
-						recvrvals = []
-						for l in onLines:
-							words = l.split()
-							moteid = int(words[0].split('_')[1])
-							if moteid != 1:
-								sendervals.append(float(words[4]))
+							#pdr stuff
+							with open(fileName) as infile:
+								sent = len([l for l in infile if 'SEND' in l])
+								
+							with open(fileName) as infile:
+								delivered = len([l for l in infile if 'RECEIVE' in l])
+								
+							pdrs.append(float(delivered) / float(sent))
+							if flow != 'x':
+								recs.append(float(delivered) / float(flow))
 							else:
-								recvrvals.append(float(words[4]))
-						senderdcs.append(np.mean(sendervals))
-						recvrdcs.append(np.mean(recvrvals))
-						
-						#delay stuff
-						if plot_delay:
-							delays = []
-							with open(fileName) as infile:
-								sendLines = [l.rstrip() for l in infile if 'SEND' in l]
-							with open(fileName) as infile:
-								receiveLines = [l.rstrip() for l in infile if 'RECEIVE' in l]
+								recs.append(float(delivered) / float(x))
 							
-							for line in sendLines:
-								words = line.split()
-								sendTime = int(words[0])
-								sender = int(words[3])
-								seqno = int(words[4])
-								rls = [rl for rl in receiveLines if int(rl.split()[0]) > sendTime and 
-									int(rl.split()[4]) == seqno and
-									int(rl.split()[3]) == sender]
-								if len(rls) > 1:
-									print("warning: multiple receive lines")
-									rls = rls[0]
-								if rls:
-									receiveTime = int(rls[0].split()[0])
-									delay = (receiveTime - sendTime) / 1000000.0
-									delays.append(delay)
+							#duty cycle stuff
+							with open(fileName) as infile:
+								onLines = [l.rstrip() for l in infile if ' ON ' in l]
+								
+							if not onLines:
+								print('No onlines for %s' % fileName)
+								continue
+							
+							if numMotes == 0:
+								words = onLines[-1].split()
+								words = words[0].split('_')
+								numMotes = int(words[1])
+							onLines = onLines[-numMotes:]
+							#onLines = onLines[1:numMotes]
+							sendervals = []
+							recvrvals = []
+							for l in onLines:
+								words = l.split()
+								moteid = int(words[0].split('_')[1])
+								if moteid != 1:
+									sendervals.append(float(words[4]))
+								else:
+									recvrvals.append(float(words[4]))
+							senderdcs.append(np.mean(sendervals))
+							recvrdcs.append(np.mean(recvrvals))
+							
+							#delay stuff
+							if plot_delay:
+								delays = []
+								with open(fileName) as infile:
+									sendLines = [l.rstrip() for l in infile if 'SEND' in l]
+								with open(fileName) as infile:
+									receiveLines = [l.rstrip() for l in infile if 'RECEIVE' in l]
+								
+								for line in sendLines:
+									words = line.split()
+									sendTime = int(words[0])
+									sender = int(words[3])
+									seqno = int(words[4])
+									rls = [rl for rl in receiveLines if int(rl.split()[0]) > sendTime and 
+										int(rl.split()[4]) == seqno and
+										int(rl.split()[3]) == sender]
+									if len(rls) > 1:
+										print("warning: multiple receive lines")
+										rls = rls[0]
+									if rls:
+										receiveTime = int(rls[0].split()[0])
+										delay = (receiveTime - sendTime) / 1000000.0
+										delays.append(delay)
+										if prot == 'contikimac' and x >= 3:
+											print("%s: delay %d for packet %d-%d" % (fileName, delay, sender, seqno))
+								if len(delays) != len(receiveLines):
+									print("warning: did not find delay for all packets")
+								if delays:
 									if prot == 'contikimac' and x >= 3:
-										print("%s: delay %d for packet %d-%d" % (fileName, delay, sender, seqno))
-							if len(delays) != len(receiveLines):
-								print("warning: did not find delay for all packets")
-							if delays:
-								if prot == 'contikimac' and x >= 3:
-									print(fileName, delays)
-								avgdelays.append(np.mean(delays))		
+										print(fileName, delays)
+									avgdelays.append(np.mean(delays))		
 
-					if pdrs:
-						print(prot, pccr, ptbi, len(pdrs))
-						pdrdata[(prot, pccr, ptbi)][0].append(x);
-						pdrdata[(prot, pccr, ptbi)][1].append(np.mean(pdrs))
-						pdrdata[(prot, pccr, ptbi)][2].append(np.mean(recs))
-						pdrdata[(prot, pccr, ptbi)][3].append(np.quantile(pdrs, 0.05))
-						pdrdata[(prot, pccr, ptbi)][4].append(np.quantile(pdrs, 0.95))
-						#pdrdata[(prot, pccr, ptbi)][3].append(2*np.std(pdrs))
+						if pdrs:
+							print(prot, ddc, pccr, ptbi, len(pdrs))
+							pdrdata[(prot, ddc, pccr, ptbi)][0].append(x);
+							pdrdata[(prot, ddc, pccr, ptbi)][1].append(np.mean(pdrs))
+							pdrdata[(prot, ddc, pccr, ptbi)][2].append(np.mean(recs))
+							pdrdata[(prot, ddc, pccr, ptbi)][3].append(np.quantile(pdrs, 0.05))
+							pdrdata[(prot, ddc, pccr, ptbi)][4].append(np.quantile(pdrs, 0.95))
+							#pdrdata[(prot, pccr, ptbi)][3].append(2*np.std(pdrs))
+							
+						if senderdcs:
+							senderdcdata[(prot, ddc, pccr, ptbi)][0].append(x)
+							senderdcdata[(prot, ddc, pccr, ptbi)][1].append(np.mean(senderdcs))
+							#senderdcdata[(prot, pccr, ptbi)][2].append(2*np.std(senderdcs))
+							senderdcdata[(prot, ddc, pccr, ptbi)][2].append(np.quantile(senderdcs, 0.05))
+							senderdcdata[(prot, ddc, pccr, ptbi)][3].append(np.quantile(senderdcs, 0.95))
+							recvrdcdata[(prot, ddc, pccr, ptbi)][0].append(x)
+							recvrdcdata[(prot, ddc, pccr, ptbi)][1].append(np.mean(recvrdcs))
+							#recvrdcdata[(prot, pccr, ptbi)][2].append(2*np.std(recvrdcs))
+							recvrdcdata[(prot, ddc, pccr, ptbi)][2].append(np.quantile(recvrdcs, 0.05))
+							recvrdcdata[(prot, ddc, pccr, ptbi)][3].append(np.quantile(recvrdcs, 0.95))
+							
+						if avgdelays:
+							delaydata[(prot, ddc, pccr, ptbi)][0].append(x)
+							delaydata[(prot, ddc, pccr, ptbi)][1].append(np.mean(avgdelays))
+							delaydata[(prot, ddc, pccr, ptbi)][2].append(np.quantile(avgdelays, 0.05))
+							delaydata[(prot, ddc, pccr, ptbi)][3].append(np.quantile(avgdelays, 0.95))
+							#delaydata[(prot, pccr, ptbi)][2].append(2*np.std(avgdelays))
+							
+					if not pdrdata[(prot, ddc, pccr, ptbi)][0]:
+						del pdrdata[(prot, ddc, pccr, ptbi)]
 						
-					if senderdcs:
-						senderdcdata[(prot, pccr, ptbi)][0].append(x)
-						senderdcdata[(prot, pccr, ptbi)][1].append(np.mean(senderdcs))
-						#senderdcdata[(prot, pccr, ptbi)][2].append(2*np.std(senderdcs))
-						senderdcdata[(prot, pccr, ptbi)][2].append(np.quantile(senderdcs, 0.05))
-						senderdcdata[(prot, pccr, ptbi)][3].append(np.quantile(senderdcs, 0.95))
-						recvrdcdata[(prot, pccr, ptbi)][0].append(x)
-						recvrdcdata[(prot, pccr, ptbi)][1].append(np.mean(recvrdcs))
-						#recvrdcdata[(prot, pccr, ptbi)][2].append(2*np.std(recvrdcs))
-						recvrdcdata[(prot, pccr, ptbi)][2].append(np.quantile(recvrdcs, 0.05))
-						recvrdcdata[(prot, pccr, ptbi)][3].append(np.quantile(recvrdcs, 0.95))
+					if not senderdcdata[(prot, ddc, pccr, ptbi)][0]:
+						del senderdcdata[(prot, ddc, pccr, ptbi)]
+						del recvrdcdata[(prot, ddc, pccr, ptbi)]
 						
-					if avgdelays:
-						delaydata[(prot, pccr, ptbi)][0].append(x)
-						delaydata[(prot, pccr, ptbi)][1].append(np.mean(avgdelays))
-						delaydata[(prot, pccr, ptbi)][2].append(np.quantile(avgdelays, 0.05))
-						delaydata[(prot, pccr, ptbi)][3].append(np.quantile(avgdelays, 0.95))
-						#delaydata[(prot, pccr, ptbi)][2].append(2*np.std(avgdelays))
-						
-				if not pdrdata[(prot, pccr, ptbi)][0]:
-					del pdrdata[(prot, pccr, ptbi)]
-					
-				if not senderdcdata[(prot, pccr, ptbi)][0]:
-					del senderdcdata[(prot, pccr, ptbi)]
-					del recvrdcdata[(prot, pccr, ptbi)]
-					
-				if not delaydata[(prot, pccr, ptbi)][0]:
-					del delaydata[(prot, pccr, ptbi)]
+					if not delaydata[(prot, ddc, pccr, ptbi)][0]:
+						del delaydata[(prot, ddc, pccr, ptbi)]
 	
 	
 	#make pdr fig
